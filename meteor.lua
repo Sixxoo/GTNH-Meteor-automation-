@@ -269,6 +269,7 @@ local function pollHardware(now)
     if m.proxy then
       local ok, active = pcall(m.proxy.isMachineActive)
       if ok then m.active = active and true or false end
+      if m.active then m.worked = true end        -- ran during this meteor
       -- switched off by soft mallet / redstone (skipped if the method is missing)
       local ok2, allowed = pcall(m.proxy.isWorkAllowed)
       if ok2 and allowed == false and not IGNORE_DISABLED then m.disabled = true end
@@ -554,6 +555,7 @@ local function summon(now)
     return false
   end
   pulsed = false
+  for _, m in ipairs(MINERS) do m.worked = false end
   setState("wait_start", "Meteor summoned, starting miners soon")
   return true
 end
@@ -751,13 +753,13 @@ local CH = {
   bl = unicode.char(0x2514), br = unicode.char(0x2518),
   h  = unicode.char(0x2500), v  = unicode.char(0x2502),
   hh = unicode.char(0x2501), vv = unicode.char(0x2503),
-  dot = unicode.char(0x25CF), ring = unicode.char(0x25CB),
+  dot = unicode.char(0x25CF), ring = unicode.char(0x25CB), check = unicode.char(0x2713),
 }
 
 -- ---------- colors (neon on near-black) ----------
 local C = {
   bg = 0x03050A, card = 0x090C14, face = 0x0B0F18,
-  neon = 0x00B4FF, red = 0xFF2A3D, green = 0x2BE05A, amber = 0xFFB020,
+  neon = 0x00B4FF, red = 0xFF2A3D, green = 0x2BE05A, amber = 0xFFB020, yellow = 0xFFE14D,
   text = 0xFFFFFF, dim = 0x6B7A8F, track = 0x1E2C40, line = 0x14507A,
 }
 
@@ -992,18 +994,23 @@ end
 
 -- miners: 4 x 4 neon status lights, numbered down each column (M01-M04, M05-M08, ...)
 local function drawMiners()
-  local activeCount = 0
+  local activeCount, doneCount = 0, 0
   for i, m in ipairs(MINERS) do
     local c = math.floor((i - 1) / 4)       -- column by column: M01-M04 go down the first column
     local r = (i - 1) % 4
+    -- icon: yellow dot = operating, green check = finished this meteor,
+    --       red ring = off (not started), ! = disabled, ? = no answer
     local mark, tag, color
     if m.active == nil then
-      mark, tag, color = CH.ring, "N/A", C.dim
+      mark, tag, color = "?", "N/A", C.dim
     elseif m.active then
-      mark, tag, color = CH.dot, "ON", C.green
+      mark, tag, color = CH.dot, "ON", C.yellow
       activeCount = activeCount + 1
     elseif m.disabled then
-      mark, tag, color = CH.ring, "DIS", C.amber
+      mark, tag, color = "!", "DIS", C.amber
+    elseif m.worked then
+      mark, tag, color = CH.check, "OK", C.green
+      doneCount = doneCount + 1
     else
       mark, tag, color = CH.ring, "OFF", C.red
     end
@@ -1012,8 +1019,8 @@ local function drawMiners()
     put(x + 1, y, m.name, C.text, C.card, 3)
     put(x + 5, y, tag, color, C.card, 3)
   end
-  cardTop(RX, 8, RW, "GT MINERS", activeCount .. "/" .. #MINERS .. " ONLINE",
-    activeCount > 0 and C.green or C.dim)
+  local right = activeCount .. " ON  " .. doneCount .. " DONE"
+  cardTop(RX, 8, RW, "GT MINERS", right, activeCount > 0 and C.yellow or (doneCount > 0 and C.green or C.dim))
 end
 
 local function drawFluid()
