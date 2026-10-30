@@ -50,10 +50,10 @@ local ME_ADDR = "xxxx"              -- me_controller or me_interface
 -- One entry per GT miner controller (max 16, shown as M01..M16).
 -- Delete the lines of miners you do not have.
 local MINER_ADDRS = {
-  "xxxx", "xxxx", "xxxx", "xxxx",
-  "xxxx", "xxxx", "xxxx", "xxxx",
-  "xxxx", "xxxx", "xxxx", "xxxx",
-  "xxxx", "xxxx", "xxxx", "xxxx",
+  "68e3", "2db5", "7684", "6227",   -- M01-M04
+  "d7b2", "64ff", "2ab2", "7885",   -- M05-M08
+  "43e2", "7568", "9d1d", "72da",   -- M09-M12
+  "cc18", "132b", "d16b", "5e9c",   -- M13-M16
 }
 
 -- ---- Drilling Fluid in the ME system ----
