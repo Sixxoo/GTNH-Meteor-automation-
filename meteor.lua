@@ -93,6 +93,7 @@ local START_TIMEOUT = 180   -- how long to wait for the miners to start
 local IDLE_CONFIRM  = 20    -- how long ALL miners must be OFF to count the meteor as mined
 local QUARRY_TIME   = 120   -- how long the Ender Quarry gets to finish
 local MINERS_PULSE  = 1.0   -- length of the miners' start pulse
+local MINER_START_GRACE = 15  -- a miner still idle this long after the start pulse is shown as OFF (problem)
 
 -- ---- Ritual start (Dynamism Tablet) ----
 -- One pulse on OUT.ritual starts the ritual before the first meteor of a program run.
@@ -185,6 +186,7 @@ local stateSince = 0          -- uptime when the current state began
 local status = "Ready"        -- one-line message shown on screen
 local retryAt = 0             -- idle: do not retry the catalyst drop before this time
 local pulsed = false          -- miners' start pulse already sent for this meteor
+local pulseAt = nil           -- uptime of that pulse
 local ritualStarted = false   -- ritual start pulse already sent (once per program run)
 local idleSince = nil         -- uptime since when all miners have been OFF
 local fluid = nil             -- Drilling Fluid in ME (mB), nil = unknown
@@ -275,6 +277,16 @@ local function pollHardware(now)
       if ok2 and allowed == false and not IGNORE_DISABLED then m.disabled = true end
     end
     if m.active == nil then minersOk = false end
+
+    -- a miner that never started after the start pulse has a problem (power, maintenance, ...)
+    if m.active then
+      m.failed = false
+    elseif m.active == false and not m.worked and pulsed and pulseAt
+        and (state == "wait_start" or state == "mining")
+        and now - pulseAt > MINER_START_GRACE then
+      if not m.failed then logEvent(m.name .. " did not start (power / maintenance?)", 0xFF7777) end
+      m.failed = true
+    end
   end
   if now >= nextFluidPoll then
     fluid, fluidNote = readFluid()
@@ -555,7 +567,8 @@ local function summon(now)
     return false
   end
   pulsed = false
-  for _, m in ipairs(MINERS) do m.worked = false end
+  pulseAt = nil
+  for _, m in ipairs(MINERS) do m.worked = false; m.failed = false end
   setState("wait_start", "Meteor summoned, starting miners soon")
   return true
 end
@@ -611,6 +624,7 @@ local function stepWaitStart(now)
     -- sent only while no miner runs, so a toggle (T flip-flop) cannot switch them off
     pulseOut("miners", MINERS_PULSE)
     pulsed = true
+    pulseAt = computer.uptime()
     status = "Start signal sent, waiting for miners"
     logEvent("Miners start signal sent", 0x9FD8FF)
   elseif elapsed(now) > START_TIMEOUT then
@@ -753,7 +767,6 @@ local CH = {
   bl = unicode.char(0x2514), br = unicode.char(0x2518),
   h  = unicode.char(0x2500), v  = unicode.char(0x2502),
   hh = unicode.char(0x2501), vv = unicode.char(0x2503),
-  dot = unicode.char(0x25CF), ring = unicode.char(0x25CB), check = unicode.char(0x2713),
 }
 
 -- ---------- colors (neon on near-black) ----------
@@ -994,33 +1007,33 @@ end
 
 -- miners: 4 x 4 neon status lights, numbered down each column (M01-M04, M05-M08, ...)
 local function drawMiners()
-  local activeCount, doneCount = 0, 0
+  local nOn, nOk, nOff = 0, 0, 0
   for i, m in ipairs(MINERS) do
     local c = math.floor((i - 1) / 4)       -- column by column: M01-M04 go down the first column
     local r = (i - 1) % 4
-    -- icon: yellow dot = operating, green check = finished this meteor,
-    --       red ring = off (not started), ! = disabled, ? = no answer
-    local mark, tag, color
+    -- yellow ON  = mining now
+    -- green  OK  = finished and ready for the next meteor
+    -- red    OFF = problem: did not start (power failure, maintenance, ...) or disabled
+    -- grey   N/A = miner does not answer
+    local tag, color
     if m.active == nil then
-      mark, tag, color = "?", "N/A", C.dim
+      tag, color = "N/A", C.dim
     elseif m.active then
-      mark, tag, color = CH.dot, "ON", C.yellow
-      activeCount = activeCount + 1
-    elseif m.disabled then
-      mark, tag, color = "!", "DIS", C.amber
-    elseif m.worked then
-      mark, tag, color = CH.check, "OK", C.green
-      doneCount = doneCount + 1
+      tag, color = "ON", C.yellow
+      nOn = nOn + 1
+    elseif m.failed or m.disabled then
+      tag, color = "OFF", C.red
+      nOff = nOff + 1
     else
-      mark, tag, color = CH.ring, "OFF", C.red
+      tag, color = "OK", C.green
+      nOk = nOk + 1
     end
     local x, y = RX + 2 + c * 9, 9 + r
-    put(x, y, mark, color, C.card)
-    put(x + 1, y, m.name, C.text, C.card, 3)
-    put(x + 5, y, tag, color, C.card, 3)
+    put(x, y, m.name, C.text, C.card, 3)
+    put(x + 4, y, tag, color, C.card, 3)
   end
-  local right = activeCount .. " ON  " .. doneCount .. " DONE"
-  cardTop(RX, 8, RW, "GT MINERS", right, activeCount > 0 and C.yellow or (doneCount > 0 and C.green or C.dim))
+  cardTop(RX, 8, RW, "GT MINERS", nOn .. " ON  " .. nOk .. " OK  " .. nOff .. " OFF",
+    nOff > 0 and C.red or (nOn > 0 and C.yellow or C.green))
 end
 
 local function drawFluid()
