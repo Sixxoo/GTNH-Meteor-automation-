@@ -721,7 +721,7 @@ end
 
 local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
-local CTRL_Y = H - 5                           -- controls: rows H-5 .. H-3
+local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
 local BH = math.max(2, math.floor((CTRL_Y - 4) / 8))   -- height of one meteor button
 local QUEUE_Y = 18                             -- queue card: rows 18 .. H-1
 local QUEUE_ROWS = H - 2 - (QUEUE_Y + 1) + 1   -- content rows of the queue card
@@ -841,25 +841,28 @@ end
 
 assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
 
--- 16 meteor cells: two columns of 8. Configured meteors are buttons (stripe is red for an
--- Ender Quarry meteor); the remaining cells stay as dim empty slots.
+-- 16 meteor cells: two columns of 8. Set-up meteors (catalyst given and renamed from the default
+-- "Meteor N") are buttons (stripe is red for an Ender Quarry meteor); all other cells stay dim
+-- and cannot be queued.
 for i = 1, 16 do
   local m = METEORS[i]
+  -- a meteor is usable once it has a catalyst and has been renamed from the default "Meteor N"
+  local ready = m and m.catalyst and m.catalyst ~= "" and not tostring(m.label):match("^Meteor %d+$")
   local col = math.floor((i - 1) / 8)
   local row = (i - 1) % 8
   addButton({
     x = 1 + col * 20, y = 4 + row * BH, w = 20, h = BH,
-    empty = (m == nil),
+    empty = not ready,
     label = m and m.label or ("slot " .. i),
     stripe = function()
-      if not m then return C.track end
+      if not ready then return C.track end
       return m.quarry and C.red or C.neon
     end,
     action = function()
-      if m then
+      if ready then
         enqueue(i)
       else
-        logEvent("Slot " .. i .. " is empty - add a meteor to METEORS", C.amber, true)
+        logEvent((m and m.label or ("Slot " .. i)) .. " is not set up (METEORS)", C.amber, true)
       end
     end,
   })
