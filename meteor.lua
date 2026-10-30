@@ -745,8 +745,8 @@ local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
 local BH = math.max(2, math.floor((CTRL_Y - 4) / 8))   -- height of one meteor button
-local STATE_Y, MINERS_Y, FLUID_Y = 3, 10, 16    -- card tops (state 3-9, miners 10-15, fluid 16-18)
-local QUEUE_Y = 19                             -- queue card: rows 19 .. H-1
+local STATE_Y, MINERS_Y, FLUID_Y = 3, 8, 14     -- card tops (state 3-7, miners 8-13, fluid 14-16)
+local QUEUE_Y = 17                             -- queue card: rows 17 .. H-1
 local QUEUE_ROWS = H - 2 - (QUEUE_Y + 1) + 1   -- content rows of the queue card
 
 local function put(x, y, text, fg, bg, width)
@@ -984,7 +984,7 @@ local function drawStatic()
   put(1, 3, "ADD METEOR TO QUEUE", C.red, C.bg)
   put(21, 3, string.rep(CH.h, 19), C.line, C.bg)
   -- cards
-  cardFrame(RX, STATE_Y, RW, 7, "STATE")
+  cardFrame(RX, STATE_Y, RW, 5, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
   cardFrame(RX, FLUID_Y, RW, 3, "DRILLING FLUID")
   cardFrame(RX, QUEUE_Y, RW, H - QUEUE_Y, "QUEUE")
@@ -1012,31 +1012,17 @@ end
 
 local PHASE_NAMES = {"Summoning meteor", "Mining - GT Miners", "Mining filler blocks", "Meteor mined"}
 
+local PHASE_COLOR = {C.neon, C.yellow, 0xB07CFF, C.green}
+
+-- Shows only the phase that is running now (phase 5 = the meteor is mined).
 local function drawStatus()
   local phase = currentPhase()
-  local hasQuarry
-  if phase == 5 then
-    hasQuarry = curHasQuarry
+  if phase == 5 then phase = 4 end
+  if phase == 0 then
+    put(RX + 2, STATE_Y + 1, "Idle", C.dim, C.card, RW - 4)
   else
-    hasQuarry = queue[1] and METEORS[queue[1].m].quarry or false
-  end
-  for k = 1, 4 do
-    local y = STATE_Y + k
-    local mark, markColor, text, textColor = CH.ring, C.dim, PHASE_NAMES[k], C.dim
-    if k == 3 and not hasQuarry and phase >= 2 then
-      mark, text = "-", "No filler blocks"            -- nothing for the Ender Quarry to do
-    elseif phase == 5 or phase > k then
-      mark, markColor, textColor = CH.check, C.green, 0xB8C4D0
-    elseif phase == k then
-      mark, markColor, textColor = CH.dot, C.yellow, C.text
-    end
-    put(RX + 2, y, mark, markColor, C.card)
-    put(RX + 4, y, text, textColor, C.card, 20)
-    if phase == k and progress then
-      drawThin(RX + 25, y, 11, progress, C.neon)
-    else
-      put(RX + 25, y, "", C.dim, C.card, 11)
-    end
+    put(RX + 2, STATE_Y + 1, "PHASE " .. phase .. "/4  ", C.dim, C.card, 10)
+    put(RX + 12, STATE_Y + 1, PHASE_NAMES[phase], PHASE_COLOR[phase], C.card, RW - 14)
   end
 
   local bad = false
@@ -1044,7 +1030,10 @@ local function drawStatus()
   for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid", "not in interface", "no me pattern", "canceled", "rejected"}) do
     if low:find(w, 1, true) then bad = true end
   end
-  put(RX + 2, STATE_Y + 5, status, bad and C.amber or C.dim, C.card, RW - 4)
+  put(RX + 2, STATE_Y + 2, status, bad and C.amber or C.text, C.card, RW - 4)
+
+  drawThin(RX + 2, STATE_Y + 3, 29, progress or 0, C.neon)
+  put(RX + 32, STATE_Y + 3, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 5)
 end
 
 -- miners: 4 x 4 neon status lights, numbered down each column (M01-M04, M05-M08, ...)
