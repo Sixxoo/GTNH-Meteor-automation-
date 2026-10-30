@@ -695,10 +695,11 @@ end
 -- =====================================================================
 
 -- Layout (80 columns, 25+ rows):
---   left  (x 1-40):  meteor buttons (2 x 8), controls (START / CLEAR QUEUE / EXIT)
---   right (x 42-79): status, GT miner tiles, Drilling Fluid, queue
---   row 1: title bar     last row: message about your last touch
--- On a taller screen the buttons get taller and the queue gets more rows.
+--   row 1-2   title bar
+--   left      meteor buttons (2 x 8) and the controls START / CLEAR QUEUE / EXIT
+--   right     cards: STATE, GT MINERS, DRILLING FLUID, QUEUE
+--   last row  message about your last touch
+-- On a taller screen the meteor buttons get taller and the queue card longer.
 
 -- Picks the screen resolution: 80 columns, rows from the screen's shape.
 local function fitResolution()
@@ -719,11 +720,11 @@ local function fitResolution()
 end
 
 local W, H = fitResolution()
-local RX, RW = 42, 38                          -- right column
-local CTRL_HEADER = H - 6                      -- "CONTROLS" strip; buttons below it
-local BH = math.max(2, math.floor((CTRL_HEADER - 3) / 8))   -- height of one meteor button
-local QUEUE_TOP = 19
-local QUEUE_ROWS = H - QUEUE_TOP               -- rows 19 .. H-1
+local RX, RW = 42, 38                          -- right column (cards)
+local CTRL_Y = H - 5                           -- controls: rows H-5 .. H-3
+local BH = math.max(2, math.floor((CTRL_Y - 4) / 8))   -- height of one meteor button
+local QUEUE_Y = 18                             -- queue card: rows 18 .. H-1
+local QUEUE_ROWS = H - 2 - (QUEUE_Y + 1) + 1   -- content rows of the queue card
 
 local function put(x, y, text, fg, bg, width)
   text = tostring(text)
@@ -743,20 +744,37 @@ local function fmt(n)
   return (r:gsub("^ ", ""))
 end
 
--- ---------- colors ----------
+-- Line-drawing characters (built at runtime so this file stays plain ASCII).
+local CH = {
+  tl = unicode.char(0x250C), tr = unicode.char(0x2510),
+  bl = unicode.char(0x2514), br = unicode.char(0x2518),
+  h  = unicode.char(0x2500), v  = unicode.char(0x2502),
+  hh = unicode.char(0x2501), vv = unicode.char(0x2503),
+  dot = unicode.char(0x25CF), ring = unicode.char(0x25CB),
+}
+
+-- ---------- colors (neon on near-black) ----------
 local C = {
-  bg = 0x000000, card = 0x161616, face = 0x222222, title = 0x0B2545,
-  text = 0xFFFFFF, dim = 0x9A9A9A, track = 0x333333,
-  good = 0x2EB872, bad = 0xE5484D, warn = 0xF5A524, off = 0x4A4A4A,
-  accent = 0x2F81F7, quarry = 0x9B5DE5, label = 0x4FC3F7, progress = 0x2F81F7,
+  bg = 0x03050A, card = 0x090C14, face = 0x0B0F18,
+  neon = 0x00B4FF, red = 0xFF2A3D, green = 0x00E5A0, amber = 0xFFB020,
+  text = 0xFFFFFF, dim = 0x6B7A8F, track = 0x1E2C40, line = 0x14507A,
 }
 
-local STATE_BG = {
-  idle = 0x3A3A3A, ritual = 0x7B3FA0, wait_start = 0xB87400,
-  mining = 0x1F5FBF, quarry = 0x7B3FA0, finish = 0x1F8A55,
+local STATE_BIG = {
+  idle = "IDLE", ritual = "RITUAL", wait_start = "STARTING",
+  mining = "MINING", quarry = "QUARRY", finish = "FINISH",
 }
 
--- ---------- buttons (flat; the touched one is inverted for a moment) ----------
+local STATE_COLOR = {
+  idle = 0xB0BCCB, ritual = 0xFF2A3D, wait_start = 0xFFB020,
+  mining = 0x00B4FF, quarry = 0xFF2A3D, finish = 0x00E5A0,
+}
+
+local function spaced(text)
+  return (text:gsub(".", "%0 "):sub(1, -2))
+end
+
+-- ---------- buttons ----------
 local buttons = {}
 
 local function addButton(b)
@@ -764,55 +782,68 @@ local function addButton(b)
   return b
 end
 
+-- Meteor buttons: dark face with a neon stripe. Control buttons: neon outline.
+-- The touched button lights up (filled neon) for a moment.
 local function drawButton(b, pressed)
-  local base = b.color and b.color() or 0x444444
+  local base = b.color and b.color() or C.neon
   local label = type(b.label) == "function" and b.label() or b.label
+  if b.outline then
+    local bg = pressed and base or C.card
+    gpu.setBackground(bg)
+    gpu.fill(b.x, b.y, b.w, b.h, " ")
+    if not pressed then
+      local hl = string.rep(CH.h, b.w - 2)
+      put(b.x, b.y, CH.tl .. hl .. CH.tr, base, C.card)
+      put(b.x, b.y + b.h - 1, CH.bl .. hl .. CH.br, base, C.card)
+      for r = b.y + 1, b.y + b.h - 2 do
+        put(b.x, r, CH.v, base, C.card)
+        put(b.x + b.w - 1, r, CH.v, base, C.card)
+      end
+    end
+    put(b.x + math.floor((b.w - unicode.len(label)) / 2), b.y + math.floor(b.h / 2), label,
+      pressed and C.bg or base, bg)
+    return
+  end
   local faceH = math.max(1, b.h - 1)            -- the last row stays empty: gap to the next button
-  local bg, fg = base, C.text
-  if pressed then bg, fg = 0xFFFFFF, 0x000000 end
+  local bg, fg = C.face, C.text
+  local stripe = b.stripe()
+  if pressed then bg, fg = stripe, C.bg end
   gpu.setBackground(C.bg)
   gpu.fill(b.x, b.y, b.w, b.h, " ")
   gpu.setBackground(bg)
   gpu.fill(b.x, b.y, b.w, faceH, " ")
-  local ty = b.y + math.floor(faceH / 2)
-  if b.stripe then
-    gpu.setBackground(pressed and 0xFFFFFF or b.stripe())
-    gpu.fill(b.x, b.y, 1, faceH, " ")
-    put(b.x + 2, ty, label, fg, bg, b.w - 2)
-  else
-    label = unicode.sub(label, 1, b.w)
-    put(b.x + math.floor((b.w - unicode.len(label)) / 2), ty, label, fg, bg)
-  end
+  gpu.setBackground(stripe)
+  gpu.fill(b.x, b.y, 1, faceH, " ")
+  put(b.x + 2, b.y + math.floor(faceH / 2), label, fg, bg, b.w - 2)
 end
 
 assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
 
--- meteor buttons: two columns of 8; the colored stripe is purple for an Ender Quarry meteor
+-- meteor buttons: two columns of 8; the stripe is red for an Ender Quarry meteor
 for i, m in ipairs(METEORS) do
   local col = math.floor((i - 1) / 8)
   local row = (i - 1) % 8
   addButton({
-    x = 1 + col * 21, y = 3 + row * BH, w = 19, h = BH,
+    x = 1 + col * 21, y = 4 + row * BH, w = 19, h = BH,
     label = m.label,
-    color = function() return C.face end,
-    stripe = function() return m.quarry and C.quarry or C.accent end,
+    stripe = function() return m.quarry and C.red or C.neon end,
     action = function() enqueue(i) end,
   })
 end
 
 local startBtn = addButton({
-  x = 1, y = H - 5, w = 12, h = 3,
+  x = 1, y = CTRL_Y, w = 12, h = 3, outline = true,
   label = function() return running and "STOP" or "START" end,
-  color = function() return running and C.bad or C.good end,
+  color = function() return running and C.red or C.green end,
   action = function()
     running = not running
-    logEvent(running and "Started" or "Stopped", running and 0x66FF66 or 0xFF7777, true)
+    logEvent(running and "Started" or "Stopped", running and 0x66FF99 or 0xFF7777, true)
   end,
 })
 
 addButton({
-  x = 14, y = H - 5, w = 15, h = 3, label = "CLEAR QUEUE",
-  color = function() return 0x9E6B00 end,
+  x = 14, y = CTRL_Y, w = 15, h = 3, outline = true, label = "CLEAR QUEUE",
+  color = function() return C.amber end,
   action = function()
     -- the meteor already summoned (first in queue) is kept; the others go back to the Interface
     local keep = (queue[1] and queue[1].loc == "fired") and queue[1] or nil
@@ -827,12 +858,12 @@ addButton({
 })
 
 addButton({
-  x = 31, y = H - 5, w = 10, h = 3, label = "EXIT",
-  color = function() return 0x666666 end,
+  x = 31, y = CTRL_Y, w = 10, h = 3, outline = true, label = "EXIT",
+  color = function() return C.dim end,
   id = "exit",
 })
 
--- Inverts the touched button for a moment, then runs its action.
+-- Lights up the touched button for a moment, then runs its action.
 local function handleTouch(x, y)
   for _, b in ipairs(buttons) do
     if x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h then
@@ -849,144 +880,159 @@ end
 -- ---------- drawing helpers ----------
 local drawnRunning = nil
 
--- Section title with a colored marker and optional right-aligned text.
-local function header(x, y, w, text, right, rightColor, bg)
-  bg = bg or C.card
-  put(x, y, " ", C.text, C.accent)
-  put(x + 1, y, " " .. text, C.label, bg, w - 1)
+-- Thin neon bar: heavy line = filled part, light line = rest. Returns the filled length.
+local function drawThin(x, y, w, frac, color, bg)
+  local fill = math.max(0, math.min(w, math.floor((frac or 0) * w + 0.5)))
+  put(x, y, string.rep(CH.hh, fill), color, bg or C.card)
+  if fill < w then put(x + fill, y, string.rep(CH.h, w - fill), C.track, bg or C.card) end
+  return fill
+end
+
+-- Top edge of a card with its title (left) and a value (right).
+local function cardTop(x, y, w, title, right, rightColor)
+  put(x, y, CH.tl .. string.rep(CH.h, w - 2) .. CH.tr, C.neon, C.card)
+  put(x, y, CH.tl, C.red, C.card)
+  put(x + 2, y, " " .. title .. " ", C.text, C.card)
   if right then
-    local s = right .. " "
-    put(x + w - unicode.len(s), y, s, rightColor or C.dim, bg)
+    local t = " " .. right .. " "
+    put(x + w - 2 - unicode.len(t), y, t, rightColor or C.dim, C.card)
   end
 end
 
--- Horizontal bar; returns the number of filled columns.
-local function drawBar(x, y, w, h, frac, color)
-  local fill = math.max(0, math.min(w, math.floor((frac or 0) * w + 0.5)))
-  gpu.setBackground(C.track)
+local function cardFrame(x, y, w, h, title)
+  gpu.setBackground(C.card)
   gpu.fill(x, y, w, h, " ")
-  if fill > 0 then
-    gpu.setBackground(color)
-    gpu.fill(x, y, fill, h, " ")
+  cardTop(x, y, w, title)
+  put(x, y + h - 1, CH.bl .. string.rep(CH.h, w - 2) .. CH.br, C.neon, C.card)
+  put(x + w - 1, y + h - 1, CH.br, C.red, C.card)
+  for r = y + 1, y + h - 2 do
+    put(x, r, CH.v, C.neon, C.card)
+    put(x + w - 1, r, CH.v, C.neon, C.card)
   end
-  return fill
 end
 
 local function drawStatic()
   gpu.setBackground(C.bg)
   gpu.fill(1, 1, W, H, " ")
-  put(1, 1, "  METEOR RITUAL CONTROLLER", C.text, C.title, W)
-  gpu.setBackground(C.card)
-  gpu.fill(RX - 1, 2, RW + 2, H - 2, " ")      -- right column is a card
-  header(1, 2, 40, "ADD METEOR TO QUEUE", "purple = quarry", C.quarry, C.bg)
-  header(1, CTRL_HEADER, 40, "CONTROLS", nil, nil, C.bg)
-  header(RX, 2, RW, "STATUS")
+  -- title bar
+  put(2, 1, "M E T ", C.text, C.bg)
+  put(8, 1, "E", C.red, C.bg)
+  put(9, 1, " O R", C.text, C.bg)
+  put(15, 1, "R I T U A L", C.dim, C.bg)
+  put(1, 2, string.rep(CH.h, W), C.line, C.bg)
+  put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
+  -- left caption
+  put(1, 3, "ADD METEOR TO QUEUE", C.red, C.bg)
+  put(21, 3, string.rep(CH.h, 9), C.line, C.bg)
+  put(31, 3, "red=quarry", C.dim, C.bg)
+  -- cards
+  cardFrame(RX, 3, RW, 5, "STATE")
+  cardFrame(RX, 8, RW, 6, "GT MINERS")
+  cardFrame(RX, 14, RW, 4, "DRILLING FLUID")
+  cardFrame(RX, QUEUE_Y, RW, H - QUEUE_Y, "QUEUE")
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
 end
 
 local function drawTitle()
-  local label, color = " STOPPED ", C.bad
-  if running then label, color = " RUNNING ", C.good end
-  put(W - #label, 1, label, C.text, color)
+  local label, color = "[ STOPPED ]", C.red
+  if running then label, color = "[ RUNNING ]", C.green end
+  put(W - #label - 1, 1, label, color, C.bg)
 end
 
 local function drawStatus()
-  put(RX, 3, " " .. (STATE_LABEL[state] or state), C.text, STATE_BG[state] or C.off, RW)
+  put(RX + 2, 4, spaced(STATE_BIG[state] or state), STATE_COLOR[state] or C.text, C.card, RW - 4)
 
   local bad = false
   local low = status:lower()
   for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid", "not in interface", "no me pattern", "canceled", "rejected"}) do
     if low:find(w, 1, true) then bad = true end
   end
-  put(RX, 4, " " .. status, bad and 0xFFAA33 or 0xFFFF88, C.card, RW)
+  put(RX + 2, 5, status, bad and C.amber or C.text, C.card, RW - 4)
 
-  local current = (queue[1] and queue[1].loc == "fired") and METEORS[queue[1].m].label or "-"
-  put(RX, 5, " Meteor: ", C.dim, C.card, 9)
-  put(RX + 9, 5, current, C.text, C.card, RW - 9)
-
-  drawBar(RX, 6, 32, 1, progress or 0, C.progress)
-  put(RX + 32, 6, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 6)
+  drawThin(RX + 2, 6, 29, progress or 0, C.neon)
+  put(RX + 32, 6, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 5)
 end
 
--- miners: 4 x 4 colored tiles
+-- miners: 4 x 4 neon status lights
 local function drawMiners()
   local activeCount = 0
   for i, m in ipairs(MINERS) do
     local r = math.floor((i - 1) / 4)
     local c = (i - 1) % 4
-    local tag, color
+    local mark, tag, color
     if m.active == nil then
-      tag, color = "N/A", 0x555555
+      mark, tag, color = CH.ring, "N/A", C.dim
     elseif m.active then
-      tag, color = "ON", C.good
+      mark, tag, color = CH.dot, "ON", C.green
       activeCount = activeCount + 1
     elseif m.disabled then
-      tag, color = "DIS", C.warn
+      mark, tag, color = CH.ring, "DIS", C.amber
     else
-      tag, color = "OFF", C.bad
+      mark, tag, color = CH.ring, "OFF", C.red
     end
-    local text = m.name .. " " .. tag
-    local pad = math.floor((8 - #text) / 2)
-    put(RX + c * 10, 9 + r, string.rep(" ", pad) .. text, C.text, color, 8)
+    local x, y = RX + 2 + c * 9, 9 + r
+    put(x, y, mark, color, C.card)
+    put(x + 1, y, m.name, C.text, C.card, 3)
+    put(x + 5, y, tag, color, C.card, 3)
   end
-  header(RX, 8, RW, "GT MINERS", activeCount .. "/" .. #MINERS .. " operating",
-    activeCount > 0 and 0x66FF66 or C.dim)
+  cardTop(RX, 8, RW, "GT MINERS", activeCount .. "/" .. #MINERS .. " ONLINE",
+    activeCount > 0 and C.green or C.dim)
 end
 
 local function drawFluid()
-  local text
-  if fluid then text = fmt(fluid) .. " mB" else text = "N/A [" .. (fluidNote or "?") .. "]" end
   local enough = fluid and fluid >= FLUID_START_MIN
-  header(RX, 14, RW, "DRILLING FLUID", text,
-    fluid and (enough and 0x66FF66 or 0xFF7777) or 0xFFCC00)
-  local color = enough and C.good or C.bad
-  local fill = drawBar(RX, 15, RW, 1, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
+  local right
+  if fluid then right = fmt(fluid) .. " mB" else right = "N/A [" .. (fluidNote or "?") .. "]" end
+  cardTop(RX, 14, RW, "DRILLING FLUID", right,
+    fluid and (enough and C.green or C.red) or C.amber)
+  put(RX + 2, 15, "needs " .. fmt(FLUID_START_MIN) .. " mB to summon a meteor", C.dim, C.card, RW - 4)
+  local barW = RW - 4
+  local color = enough and C.neon or C.red
+  drawThin(RX + 2, 16, barW, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
   -- tick mark = minimum needed to summon a meteor
-  local mark = math.min(RW - 1, math.floor(FLUID_START_MIN / FLUID_BAR_MAX * RW))
-  gpu.setForeground(C.text)
-  gpu.setBackground(mark < fill and color or C.track)
-  gpu.set(RX + mark, 15, "|")
-  put(RX, 16, " Needs " .. fmt(FLUID_START_MIN) .. " mB to summon a meteor", C.dim, C.card, RW)
+  local mark = math.min(barW - 1, math.floor(FLUID_START_MIN / FLUID_BAR_MAX * barW))
+  put(RX + 2 + mark, 16, CH.vv, C.red, C.card)
 end
 
 local function drawQueue()
-  header(RX, 18, RW, "QUEUE", #queue .. " queued")
+  cardTop(RX, QUEUE_Y, RW, "QUEUE", #queue .. " QUEUED", C.dim)
   for r = 1, QUEUE_ROWS do
-    local line, fg, bg, tag, tagColor = "", C.text, C.card, nil, C.dim
+    local line, fg, tag, tagColor = "", C.text, nil, C.dim
     local e = queue[r]
     if r == QUEUE_ROWS and #queue > QUEUE_ROWS then
       line, fg = "  ... +" .. (#queue - QUEUE_ROWS + 1) .. " more", C.dim
     elseif e then
       local mt = METEORS[e.m]
       local active = e.loc == "fired"
-      line = string.format("%s%2d. %s", active and "> " or "  ", r, mt.label)
-      if mt.quarry then fg = 0xD0A8FF end
+      line = string.format("%s%2d  %s", active and ">" or " ", r, mt.label)
+      if mt.quarry then fg = 0xFF7A86 end
       if active then
-        tag, tagColor, bg, fg = "ACTIVE", 0x66E0FF, 0x0B3C55, 0x66E0FF
+        tag, tagColor, fg = "ACTIVE", C.neon, C.neon
       elseif e.loc == "dropper" then
         tag = "in dropper"
       elseif e.loc == "crafting" then
-        tag, tagColor = e.note and "craft retry" or "crafting", 0xFFAA33
+        tag, tagColor = e.note and "craft retry" or "crafting", C.amber
       else
         tag = "waiting"
       end
     elseif r == 1 then
       line, fg = "  (queue is empty)", C.dim
     end
-    put(RX, QUEUE_TOP + r - 1, line, fg, bg, RW)
-    if tag then put(RX + RW - #tag - 1, QUEUE_TOP + r - 1, tag, tagColor, bg) end
+    local y = QUEUE_Y + r
+    put(RX + 2, y, line, fg, C.card, RW - 4)
+    if tag then put(RX + RW - 2 - #tag - 1, y, tag, tagColor, C.card) end
   end
 end
 
 -- Last event / touch action: bright for a few seconds after your touch, then dim.
 local function drawMessage()
   local e = events[1]
-  local text, fg, bg = " Touch a button to start", C.dim, 0x1A1A1A
+  local text, fg, bg = " touch a button to start", C.dim, C.bg
   if e then
     local fresh = e.action and (computer.uptime() - e.at < 4)
     text = " " .. e.t .. "  " .. e.text
-    if fresh then fg, bg = C.text, C.accent else fg = e.color end
+    if fresh then fg, bg = C.bg, C.neon else fg = C.dim end
   end
   put(1, H, text, fg, bg, W)
 end
