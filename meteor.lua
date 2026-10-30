@@ -65,6 +65,7 @@ local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 -- ---- Meteors (max 16 with this screen layout) ----
 -- label:    text on the button (max 15 characters)
 -- catalyst: item name of the catalyst
+-- damage:   optional item damage / metadata (only used to find the ME crafting pattern)
 --           (check with tp.getStackInSlot(CHEST_SIDE, slot).name)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 local METEORS = {
@@ -72,6 +73,14 @@ local METEORS = {
   {label = "Meteor 2", catalyst = "minecraft:gold_block",    quarry = true},
   {label = "Meteor 3", catalyst = "minecraft:diamond_block", quarry = true},
 }
+
+-- ---- Crafting the catalysts in the ME system ----
+-- When the chest does not hold the catalyst of a clicked meteor, a crafting request
+-- (1 piece) is sent to the ME system. The ME system must deliver the crafted item into
+-- the catalyst chest (e.g. an export bus or an ME interface next to the chest).
+-- The meteor waits in the queue ("crafting") until the craft is done.
+local CRAFT_MISSING = true      -- false: a missing catalyst is simply refused
+local CRAFT_RETRY   = 10        -- seconds before a failed or canceled craft is requested again
 
 -- ---- Timing (seconds) ----
 local START_DELAY   = 5     -- after the catalyst drop, before the miners' start pulse
@@ -320,9 +329,33 @@ local function hasLoc(loc)
   return false
 end
 
--- Queue entries: {m = meteor index, loc = "chest" | "dropper" | "fired"}
+-- Queue entries: {m = meteor index, loc = "crafting" | "chest" | "dropper" | "fired"}
 -- The catalysts of queued meteors wait in the chest. Only the next one is moved into the
 -- dropper (max 1); when it has been fired the following one is moved in.
+-- "crafting": the catalyst is being made by the ME system and has not reached the chest yet.
+
+-- Sends the crafting request for a queue entry to the ME system.
+local function requestCraft(entry)
+  local mt = METEORS[entry.m]
+  if not me or not me.getCraftables then return false, "ME can't craft" end
+  local filter = {name = mt.catalyst}
+  if mt.damage then filter.damage = mt.damage end
+  local list = me.getCraftables(filter)
+  local craftable = list and list[1]
+  if not craftable then return false, "No ME pattern: " .. mt.label end
+  local job = craftable.request(1)
+  if not job then return false, "ME craft rejected" end
+  entry.craft = job
+  return true
+end
+
+local function waitingBefore()
+  for _, e in ipairs(queue) do
+    if e.loc == "chest" or e.loc == "crafting" then return true end
+  end
+  return false
+end
+
 local function enqueueRaw(i)
   if #queue >= 20 then return false, "Queue is full" end
   local item = METEORS[i].catalyst
@@ -330,14 +363,15 @@ local function enqueueRaw(i)
   for _, e in ipairs(queue) do
     if e.loc == "chest" and METEORS[e.m].catalyst == item then reserved = reserved + 1 end
   end
-  if countItem(CHEST_SIDE, item) <= reserved then return false, "Missing catalyst: " .. item end
-  local waiting = false
-  for _, e in ipairs(queue) do
-    if e.loc == "chest" then waiting = true end
-  end
   local entry = {m = i, loc = "chest"}
-  -- nothing waits before it and the dropper is free: load the dropper now
-  if not waiting and not hasLoc("dropper") and isEmpty(DROPPER_SIDE) then
+
+  if countItem(CHEST_SIDE, item) <= reserved then
+    -- not in stock
+    if not CRAFT_MISSING then return false, "Missing catalyst: " .. item end
+    entry.loc = "crafting"
+    entry.nextTry = 0          -- the craft request is sent from the main loop
+  elseif not waitingBefore() and not hasLoc("dropper") and isEmpty(DROPPER_SIDE) then
+    -- nothing waits before it and the dropper is free: load the dropper now
     local ok, err = moveOne(CHEST_SIDE, DROPPER_SIDE, item)
     if not ok then return false, err end
     entry.loc = "dropper"
@@ -361,11 +395,43 @@ local function promoteRaw(entry)
   return true
 end
 
--- Keeps the dropper loaded with the next queued catalyst.
+-- Keeps the dropper loaded with the next queued catalyst (queue order is kept:
+-- nothing is loaded while an earlier meteor still waits for its craft).
 local function refillDropper()
   if hasLoc("dropper") then return end
   for _, e in ipairs(queue) do
     if e.loc == "chest" then safe(promoteRaw, e); return end
+    if e.loc == "crafting" then return end
+  end
+end
+
+-- Sends / follows the ME crafting jobs of the queue.
+local function updateCrafts(now)
+  for _, e in ipairs(queue) do
+    if e.loc == "crafting" then
+      if not e.craft then
+        if now >= (e.nextTry or 0) then
+          local ok, err = safe(requestCraft, e)
+          if ok then
+            e.note = nil
+          else
+            e.note = err
+            e.nextTry = now + CRAFT_RETRY
+          end
+        end
+      else
+        local okC, canceled = pcall(e.craft.isCanceled)
+        local okD, done = pcall(e.craft.isDone)
+        if okC and canceled then
+          e.craft = nil
+          e.note = "Craft canceled, retrying"
+          e.nextTry = now + CRAFT_RETRY
+        elseif okD and done then
+          e.craft = nil
+          e.loc = "chest"      -- the item should arrive in the chest; loading retries until it does
+        end
+      end
+    end
   end
 end
 
@@ -426,6 +492,20 @@ local function stepIdle(now)
   if fluid and fluid < FLUID_START_MIN then
     status = "Waiting for fluid (min " .. string.format("%d", FLUID_START_MIN) .. " mB)"
     return
+  end
+  -- the catalyst must be ready before the ritual is started
+  local head = queue[1]
+  if head.loc == "crafting" then
+    status = head.note or ("Crafting catalyst: " .. METEORS[head.m].label)
+    return
+  end
+  if head.loc ~= "dropper" then
+    local ok, err = safe(promoteRaw, head)
+    if not ok then
+      status = err
+      retryAt = now + 5
+      return
+    end
   end
   if RITUAL_EACH_METEOR or not ritualStarted then
     pulseOut("ritual", RITUAL_PULSE)
@@ -795,6 +875,8 @@ local function drawQueue()
         tag, tagColor, bg = "ACTIVE", 0x66E0FF, C.hilite
       elseif e.loc == "dropper" then
         tag = "in dropper"
+      elseif e.loc == "crafting" then
+        tag, tagColor = e.note and "craft retry" or "crafting", 0xFFAA33
       else
         tag = "waiting"
       end
@@ -832,6 +914,7 @@ local function main()
     if ev and handleTouch(x, y) == "exit" then return end
     pollHardware(computer.uptime())
     if running then step() end
+    updateCrafts(computer.uptime())
     refillDropper()
     drawDynamic()
   end
