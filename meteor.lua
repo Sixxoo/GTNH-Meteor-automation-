@@ -954,12 +954,12 @@ local function drawStatus()
   put(RX + 32, 6, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 5)
 end
 
--- miners: 4 x 4 neon status lights
+-- miners: 4 x 4 neon status lights, numbered down each column (M01-M04, M05-M08, ...)
 local function drawMiners()
   local activeCount = 0
   for i, m in ipairs(MINERS) do
-    local r = math.floor((i - 1) / 4)
-    local c = (i - 1) % 4
+    local c = math.floor((i - 1) / 4)       -- column by column: M01-M04 go down the first column
+    local r = (i - 1) % 4
     local mark, tag, color
     if m.active == nil then
       mark, tag, color = CH.ring, "N/A", C.dim
