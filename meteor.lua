@@ -805,7 +805,7 @@ local function drawButton(b, pressed)
     return
   end
   local faceH = math.max(1, b.h - 1)            -- the last row stays empty: gap to the next button
-  local bg, fg = C.face, C.text
+  local bg, fg = b.empty and 0x06080D or C.face, b.empty and C.dim or C.text
   local stripe = b.stripe()
   if pressed then bg, fg = stripe, C.bg end
   gpu.setBackground(C.bg)
@@ -814,20 +814,54 @@ local function drawButton(b, pressed)
   gpu.fill(b.x, b.y, b.w, faceH, " ")
   gpu.setBackground(stripe)
   gpu.fill(b.x, b.y, 1, faceH, " ")
-  put(b.x + 2, b.y + math.floor(faceH / 2), label, fg, bg, b.w - 2)
+  -- text area: right of the stripe. A long name wraps to a second line when the cell is
+  -- tall enough, otherwise it is shortened with a dot.
+  local tw = b.w - 2
+  local line1, line2 = label, nil
+  if unicode.len(label) > tw then
+    if faceH >= 2 then
+      local cut = tw
+      while cut > 1 and unicode.sub(label, cut + 1, cut + 1) ~= " " do cut = cut - 1 end
+      if cut <= 1 then cut = tw end
+      line1 = unicode.sub(label, 1, cut)
+      line2 = unicode.sub(label, cut + 1):gsub("^ +", "")
+      if unicode.len(line2) > tw then line2 = unicode.sub(line2, 1, tw - 1) .. "." end
+    else
+      line1 = unicode.sub(label, 1, tw - 1) .. "."
+    end
+  end
+  if line2 then
+    local y0 = b.y + math.floor((faceH - 2) / 2)
+    put(b.x + 2, y0, line1, fg, bg, tw)
+    put(b.x + 2, y0 + 1, line2, fg, bg, tw)
+  else
+    put(b.x + 2, b.y + math.floor((faceH - 1) / 2), line1, fg, bg, tw)
+  end
 end
 
 assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
 
--- meteor buttons: two columns of 8; the stripe is red for an Ender Quarry meteor
-for i, m in ipairs(METEORS) do
+-- 16 meteor cells: two columns of 8. Configured meteors are buttons (stripe is red for an
+-- Ender Quarry meteor); the remaining cells stay as dim empty slots.
+for i = 1, 16 do
+  local m = METEORS[i]
   local col = math.floor((i - 1) / 8)
   local row = (i - 1) % 8
   addButton({
-    x = 1 + col * 21, y = 4 + row * BH, w = 19, h = BH,
-    label = m.label,
-    stripe = function() return m.quarry and C.red or C.neon end,
-    action = function() enqueue(i) end,
+    x = 1 + col * 20, y = 4 + row * BH, w = 20, h = BH,
+    empty = (m == nil),
+    label = m and m.label or ("slot " .. i),
+    stripe = function()
+      if not m then return C.track end
+      return m.quarry and C.red or C.neon
+    end,
+    action = function()
+      if m then
+        enqueue(i)
+      else
+        logEvent("Slot " .. i .. " is empty - add a meteor to METEORS", C.amber, true)
+      end
+    end,
   })
 end
 
