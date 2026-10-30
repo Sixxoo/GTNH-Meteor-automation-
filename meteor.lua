@@ -117,6 +117,10 @@ local QUARRY_PULSE  = 1.0   -- length of the pulse in "pulse" mode
 -- false: such miners block the meteor from being counted as mined.
 local IGNORE_DISABLED = true
 
+-- ---- Clock shown on the screen (real-world time) ----
+-- Fixed offset from UTC in hours: 1 = UTC+1 (use 2 for summer time).
+local TIMEZONE_HOURS = 1
+
 -- =====================================================================
 -- HARDWARE ACCESS
 -- =====================================================================
@@ -201,11 +205,41 @@ local progress = nil          -- 0..1 progress of a timed step (nil = none)
 local events = {}
 local lastAction = nil           -- {text, at} of the latest touch action
 
+-- Real-world time: the modification time of a freshly written file is the real clock of the
+-- server (the in-game os.time() is not). Read once, then advanced with the uptime.
+local clockBase = nil           -- {real = epoch seconds, up = uptime}
+
+local function realEpoch()
+  local ok, t = pcall(function()
+    local fs = require("filesystem")
+    local path = "/tmp/.meteor_clock"
+    local f = io.open(path, "w")
+    if f then f:write("x"); f:close() end
+    return math.floor(fs.lastModified(path) / 1000)
+  end)
+  if ok and type(t) == "number" and t > 0 then return t end
+  return nil
+end
+
+-- Seconds since midnight of the shown time zone, or nil when the real time is unknown.
+local function clockSeconds()
+  local up = computer.uptime()
+  if not clockBase or up - clockBase.up > 600 then
+    local t = realEpoch()
+    if t then clockBase = {real = t, up = up} end
+  end
+  if not clockBase then return nil end
+  return (clockBase.real + math.floor(up - clockBase.up) + TIMEZONE_HOURS * 3600) % 86400
+end
+
+local function clockText()
+  local t = clockSeconds()
+  if not t then return "--:--:--" end
+  return string.format("%02d:%02d:%02d", math.floor(t / 3600), math.floor(t / 60) % 60, t % 60)
+end
+
 local function nowText()
-  local ok, t = pcall(os.date, "%H:%M")
-  if ok and t then return t end
-  local m = math.floor(computer.uptime() / 60)
-  return string.format("%02d:%02d", math.floor(m / 60) % 24, m % 60)
+  return clockText():sub(1, 5)
 end
 
 local function logEvent(text, color, isAction)
@@ -976,8 +1010,9 @@ local function drawStatic()
   gpu.setBackground(C.bg)
   gpu.fill(1, 1, W, H, " ")
   -- title bar
-  put(2, 1, "METEOR RITUAL", C.text, C.bg)
-  put(16, 1, "by Sixxo", C.neon, C.bg)
+  local titleX = math.floor((W - 22) / 2) + 1        -- "METEOR RITUAL by Sixxo" is 22 wide
+  put(titleX, 1, "METEOR RITUAL", C.text, C.bg)
+  put(titleX + 14, 1, "by Sixxo", C.neon, C.bg)
   put(1, 2, string.rep(CH.h, W), C.line, C.bg)
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
@@ -993,6 +1028,7 @@ local function drawStatic()
 end
 
 local function drawTitle()
+  put(2, 1, clockText(), 0xB0BCCB, C.bg, 8)
   local label, color = "[ STOPPED ]", C.red
   if running then label, color = "[ RUNNING ]", C.green end
   put(W - #label - 1, 1, label, color, C.bg)
