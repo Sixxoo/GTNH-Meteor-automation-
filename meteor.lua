@@ -31,7 +31,6 @@ local tp  = component.transposer
 -- ---- Catalyst chest and dropper (transposer sides) ----
 local CHEST_SIDE   = sides.up       -- chest with the catalysts (above the transposer)
 local DROPPER_SIDE = sides.down     -- dropper (below the transposer, holds max 1 catalyst)
-local BUFFER_SIDE  = sides.east     -- buffer chest: catalysts of the queued meteors wait here
 
 -- ---- Redstone outputs ----
 -- side: side of the redstone component the signal comes out of.
@@ -302,6 +301,18 @@ local function moveOne(fromSide, toSide, itemName)
   return true
 end
 
+-- How many of an item the chest holds.
+local function countItem(side, itemName)
+  local size = tp.getInventorySize(side)
+  if not size then return 0 end
+  local total = 0
+  for slot = 1, size do
+    local stack = tp.getStackInSlot(side, slot)
+    if stack and stack.name == itemName then total = total + (stack.size or 1) end
+  end
+  return total
+end
+
 local function hasLoc(loc)
   for _, e in ipairs(queue) do
     if e.loc == loc then return true end
@@ -309,15 +320,29 @@ local function hasLoc(loc)
   return false
 end
 
--- Queue entries: {m = meteor index, loc = "dropper" | "buffer" | "fired"}
--- Clicking a meteor takes its catalyst out of the chest right away: into the dropper
--- when the dropper is free, otherwise into the buffer chest.
+-- Queue entries: {m = meteor index, loc = "chest" | "dropper" | "fired"}
+-- The catalysts of queued meteors wait in the chest. Only the next one is moved into the
+-- dropper (max 1); when it has been fired the following one is moved in.
 local function enqueueRaw(i)
   if #queue >= 20 then return false, "Queue is full" end
-  local toDropper = (not hasLoc("buffer")) and isEmpty(DROPPER_SIDE)
-  local ok, err = moveOne(CHEST_SIDE, toDropper and DROPPER_SIDE or BUFFER_SIDE, METEORS[i].catalyst)
-  if not ok then return false, err end
-  queue[#queue + 1] = {m = i, loc = toDropper and "dropper" or "buffer"}
+  local item = METEORS[i].catalyst
+  local reserved = 0
+  for _, e in ipairs(queue) do
+    if e.loc == "chest" and METEORS[e.m].catalyst == item then reserved = reserved + 1 end
+  end
+  if countItem(CHEST_SIDE, item) <= reserved then return false, "Missing catalyst: " .. item end
+  local waiting = false
+  for _, e in ipairs(queue) do
+    if e.loc == "chest" then waiting = true end
+  end
+  local entry = {m = i, loc = "chest"}
+  -- nothing waits before it and the dropper is free: load the dropper now
+  if not waiting and not hasLoc("dropper") and isEmpty(DROPPER_SIDE) then
+    local ok, err = moveOne(CHEST_SIDE, DROPPER_SIDE, item)
+    if not ok then return false, err end
+    entry.loc = "dropper"
+  end
+  queue[#queue + 1] = entry
   return true
 end
 
@@ -326,11 +351,11 @@ local function enqueue(i)
   if not ok then status = err end
 end
 
--- Buffer -> dropper for an entry (only when the dropper is empty).
+-- Chest -> dropper for an entry (only when the dropper is empty).
 local function promoteRaw(entry)
   if entry.loc == "dropper" then return true end
   if not isEmpty(DROPPER_SIDE) then return false, "Dropper not empty" end
-  local ok, err = moveOne(BUFFER_SIDE, DROPPER_SIDE, METEORS[entry.m].catalyst)
+  local ok, err = moveOne(CHEST_SIDE, DROPPER_SIDE, METEORS[entry.m].catalyst)
   if not ok then return false, err end
   entry.loc = "dropper"
   return true
@@ -340,7 +365,7 @@ end
 local function refillDropper()
   if hasLoc("dropper") then return end
   for _, e in ipairs(queue) do
-    if e.loc == "buffer" then safe(promoteRaw, e); return end
+    if e.loc == "chest" then safe(promoteRaw, e); return end
   end
 end
 
@@ -357,8 +382,9 @@ end
 
 -- Puts the catalyst of a removed queue entry back into the chest.
 local function returnCatalyst(entry)
-  local from = (entry.loc == "dropper" and DROPPER_SIDE) or (entry.loc == "buffer" and BUFFER_SIDE)
-  if from then safe(moveOne, from, CHEST_SIDE, METEORS[entry.m].catalyst) end
+  if entry.loc == "dropper" then
+    safe(moveOne, DROPPER_SIDE, CHEST_SIDE, METEORS[entry.m].catalyst)
+  end
 end
 
 local function startQuarry()
@@ -770,7 +796,7 @@ local function drawQueue()
       elseif e.loc == "dropper" then
         tag = "in dropper"
       else
-        tag = "in buffer"
+        tag = "waiting"
       end
     elseif r == 1 then
       line, fg = " (queue is empty)", C.dim
