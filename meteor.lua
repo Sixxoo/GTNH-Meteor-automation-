@@ -72,7 +72,7 @@ local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 --           (check with tp.getStackInSlot(sides.up, slot).name)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 local METEORS = {
-  {label = "Meteor 1", catalyst = "Exquisite Diamond",        quarry = false},
+  {label = "Exquisite Diamond", catalyst = "Exquisite Diamond", quarry = false},
   {label = "Meteor 2", catalyst = "minecraft:gold_block",    quarry = true},
   {label = "Meteor 3", catalyst = "minecraft:diamond_block", quarry = true},
 }
