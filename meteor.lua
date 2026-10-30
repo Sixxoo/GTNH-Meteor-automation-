@@ -29,7 +29,9 @@ local tp  = component.transposer
 -- =====================================================================
 
 -- ---- Catalyst chest and dropper (transposer sides) ----
-local CHEST_SIDE   = sides.up       -- ME Interface with the catalysts (above the transposer)
+-- ME Interfaces with the catalysts, one entry per transposer side that has one.
+-- Add more sides when you attach more Interfaces (never the dropper's side).
+local SOURCE_SIDES = {sides.up}
 local DROPPER_SIDE = sides.down     -- dropper (below the transposer, holds max 1 catalyst)
 
 -- ---- Redstone outputs ----
@@ -66,7 +68,7 @@ local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 -- label:    text on the button (max 15 characters)
 -- catalyst: item name of the catalyst
 -- damage:   optional item damage / metadata (only used to find the ME crafting pattern)
---           (check with tp.getStackInSlot(CHEST_SIDE, slot).name)
+--           (check with tp.getStackInSlot(sides.up, slot).name)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 local METEORS = {
   {label = "Meteor 1", catalyst = "minecraft:iron_block",    quarry = false},
@@ -302,6 +304,24 @@ local function isEmpty(side)
   return true
 end
 
+local function countItem(side, itemName)
+  local size = tp.getInventorySize(side)
+  if not size then return 0 end
+  local total = 0
+  for slot = 1, size do
+    local stack = tp.getStackInSlot(side, slot)
+    if stack and stack.name == itemName then total = total + (stack.size or 1) end
+  end
+  return total
+end
+
+-- Total of an item over all source Interfaces.
+local function countSources(itemName)
+  local total = 0
+  for _, side in ipairs(SOURCE_SIDES) do total = total + countItem(side, itemName) end
+  return total
+end
+
 -- Moves one item with the given name between two inventories.
 local function moveOne(fromSide, toSide, itemName)
   local slot = findStack(fromSide, itemName)
@@ -312,15 +332,12 @@ local function moveOne(fromSide, toSide, itemName)
 end
 
 -- How many of an item the chest holds.
-local function countItem(side, itemName)
-  local size = tp.getInventorySize(side)
-  if not size then return 0 end
-  local total = 0
-  for slot = 1, size do
-    local stack = tp.getStackInSlot(side, slot)
-    if stack and stack.name == itemName then total = total + (stack.size or 1) end
+-- Moves one catalyst from whichever source Interface holds it into the dropper.
+local function takeFromSources(itemName)
+  for _, side in ipairs(SOURCE_SIDES) do
+    if findStack(side, itemName) then return moveOne(side, DROPPER_SIDE, itemName) end
   end
-  return total
+  return false, "Not in interface: " .. itemName
 end
 
 local function hasLoc(loc)
@@ -378,11 +395,11 @@ local function enqueueRaw(i)
   end
   local entry = {m = i, loc = "chest"}
 
-  local inInterface = countItem(CHEST_SIDE, item)
+  local inInterface = countSources(item)
   if inInterface > reserved then
     -- visible in the Interface right now: load the dropper if nothing waits before it
     if not waitingBefore() and not hasLoc("dropper") and isEmpty(DROPPER_SIDE) then
-      local ok, err = moveOne(CHEST_SIDE, DROPPER_SIDE, item)
+      local ok, err = takeFromSources(item)
       if not ok then return false, err end
       entry.loc = "dropper"
     end
@@ -407,7 +424,7 @@ end
 local function promoteRaw(entry)
   if entry.loc == "dropper" then return true end
   if not isEmpty(DROPPER_SIDE) then return false, "Dropper not empty" end
-  local ok, err = moveOne(CHEST_SIDE, DROPPER_SIDE, METEORS[entry.m].catalyst)
+  local ok, err = takeFromSources(METEORS[entry.m].catalyst)
   if not ok then return false, err end
   entry.loc = "dropper"
   return true
@@ -467,7 +484,7 @@ end
 -- Puts the catalyst of a removed queue entry back into the chest.
 local function returnCatalyst(entry)
   if entry.loc == "dropper" then
-    safe(moveOne, DROPPER_SIDE, CHEST_SIDE, METEORS[entry.m].catalyst)
+    safe(moveOne, DROPPER_SIDE, SOURCE_SIDES[1], METEORS[entry.m].catalyst)
   end
 end
 
