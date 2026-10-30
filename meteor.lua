@@ -45,7 +45,7 @@ local OUT = {
 
 -- ---- Component addresses (the first few characters are enough) ----
 -- List them with:  components
-local ME_ADDR = "xxxx"              -- me_controller or me_interface
+local ME_ADDR = "00bd"              -- me_controller or me_interface
 
 -- One entry per GT miner controller (max 16, shown as M01..M16).
 -- Delete the lines of miners you do not have.
