@@ -915,11 +915,8 @@ local function drawStatic()
   gpu.setBackground(C.bg)
   gpu.fill(1, 1, W, H, " ")
   -- title bar
-  put(2, 1, "M E T ", C.text, C.bg)
-  put(8, 1, "E", C.red, C.bg)
-  put(9, 1, " O R", C.text, C.bg)
-  put(15, 1, "R I T U A L", C.dim, C.bg)
-  put(27, 1, "by Sixxo", C.neon, C.bg)
+  put(2, 1, "METEOR RITUAL", C.text, C.bg)
+  put(16, 1, "by Sixxo", C.neon, C.bg)
   put(1, 2, string.rep(CH.h, W), C.line, C.bg)
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
