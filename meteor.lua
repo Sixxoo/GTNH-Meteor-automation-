@@ -745,28 +745,18 @@ end
 
 -- ---------- colors ----------
 local C = {
-  bg = 0x000000, title = 0x12304D, header = 0x262626, headerText = 0x7FD1FF,
-  text = 0xFFFFFF, dim = 0x9A9A9A, track = 0x303030, divider = 0x1E1E1E,
-  good = 0x2E9E3E, bad = 0xB02A2A, warn = 0xB87400, off = 0x4A4A4A,
-  accent = 0x1565C0, quarry = 0x7A4BB5, progress = 0x2196F3,
+  bg = 0x000000, card = 0x161616, face = 0x222222, title = 0x0B2545,
+  text = 0xFFFFFF, dim = 0x9A9A9A, track = 0x333333,
+  good = 0x2EB872, bad = 0xE5484D, warn = 0xF5A524, off = 0x4A4A4A,
+  accent = 0x2F81F7, quarry = 0x9B5DE5, label = 0x4FC3F7, progress = 0x2F81F7,
 }
 
 local STATE_BG = {
-  idle = 0x4A4A4A, ritual = 0x7B3FA0, wait_start = 0xB87400,
-  mining = 0x1565C0, quarry = 0x7B3FA0, finish = 0x2E9E3E,
+  idle = 0x3A3A3A, ritual = 0x7B3FA0, wait_start = 0xB87400,
+  mining = 0x1F5FBF, quarry = 0x7B3FA0, finish = 0x1F8A55,
 }
 
--- brightness change of an 0xRRGGBB color (f < 1 darker, f > 1 lighter)
-local function shade(color, f)
-  local r = math.min(255, math.floor(math.floor(color / 65536) % 256 * f))
-  local g = math.min(255, math.floor(math.floor(color / 256) % 256 * f))
-  local b = math.min(255, math.floor(color % 256 * f))
-  return r * 65536 + g * 256 + b
-end
-
--- ---------- 3D buttons ----------
--- Raised button: lit top edge, face, dark shadow row at the bottom.
--- Pressed button: no shadow, the face moves down and gets darker.
+-- ---------- buttons (flat; the touched one is inverted for a moment) ----------
 local buttons = {}
 
 local function addButton(b)
@@ -777,42 +767,35 @@ end
 local function drawButton(b, pressed)
   local base = b.color and b.color() or 0x444444
   local label = type(b.label) == "function" and b.label() or b.label
-  label = unicode.sub(label, 1, b.w)
-  local faceH = b.h - 1
-  local y0, color
+  local faceH = math.max(1, b.h - 1)            -- the last row stays empty: gap to the next button
+  local bg, fg = base, C.text
+  if pressed then bg, fg = 0xFFFFFF, 0x000000 end
   gpu.setBackground(C.bg)
   gpu.fill(b.x, b.y, b.w, b.h, " ")
-  if pressed then
-    y0, color = b.y + 1, shade(base, 0.7)
-    gpu.setBackground(color)
-    gpu.fill(b.x, y0, b.w, faceH, " ")
+  gpu.setBackground(bg)
+  gpu.fill(b.x, b.y, b.w, faceH, " ")
+  local ty = b.y + math.floor(faceH / 2)
+  if b.stripe then
+    gpu.setBackground(pressed and 0xFFFFFF or b.stripe())
+    gpu.fill(b.x, b.y, 1, faceH, " ")
+    put(b.x + 2, ty, label, fg, bg, b.w - 2)
   else
-    y0, color = b.y, base
-    gpu.setBackground(color)
-    gpu.fill(b.x, y0, b.w, faceH, " ")
-    if faceH >= 2 then                            -- lit top edge
-      gpu.setBackground(shade(base, 1.35))
-      gpu.fill(b.x, y0, b.w, 1, " ")
-    end
-    gpu.setBackground(shade(base, 0.45))          -- shadow
-    gpu.fill(b.x, b.y + b.h - 1, b.w, 1, " ")
+    label = unicode.sub(label, 1, b.w)
+    put(b.x + math.floor((b.w - unicode.len(label)) / 2), ty, label, fg, bg)
   end
-  local ty = y0 + math.floor((faceH - 1) / 2)
-  if faceH >= 3 and not pressed then ty = y0 + math.floor(faceH / 2) end
-  put(b.x + math.floor((b.w - unicode.len(label)) / 2), ty, label, C.text,
-    (not pressed and faceH >= 2 and ty == y0) and shade(base, 1.35) or color)
 end
 
 assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
 
--- meteor buttons: two columns of 8; purple = has an Ender Quarry step
+-- meteor buttons: two columns of 8; the colored stripe is purple for an Ender Quarry meteor
 for i, m in ipairs(METEORS) do
   local col = math.floor((i - 1) / 8)
   local row = (i - 1) % 8
   addButton({
     x = 1 + col * 21, y = 3 + row * BH, w = 19, h = BH,
-    label = "+ " .. m.label,
-    color = function() return m.quarry and C.quarry or C.accent end,
+    label = m.label,
+    color = function() return C.face end,
+    stripe = function() return m.quarry and C.quarry or C.accent end,
     action = function() enqueue(i) end,
   })
 end
@@ -849,7 +832,7 @@ addButton({
   id = "exit",
 })
 
--- Presses the touched button (it moves down for a moment), then runs its action.
+-- Inverts the touched button for a moment, then runs its action.
 local function handleTouch(x, y)
   for _, b in ipairs(buttons) do
     if x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h then
@@ -866,12 +849,14 @@ end
 -- ---------- drawing helpers ----------
 local drawnRunning = nil
 
--- Section strip with optional right-aligned text.
-local function header(x, y, w, text, right, rightColor)
-  put(x, y, " " .. text, C.headerText, C.header, w)
+-- Section title with a colored marker and optional right-aligned text.
+local function header(x, y, w, text, right, rightColor, bg)
+  bg = bg or C.card
+  put(x, y, " ", C.text, C.accent)
+  put(x + 1, y, " " .. text, C.label, bg, w - 1)
   if right then
     local s = right .. " "
-    put(x + w - unicode.len(s), y, s, rightColor or C.dim, C.header)
+    put(x + w - unicode.len(s), y, s, rightColor or C.dim, bg)
   end
 end
 
@@ -891,10 +876,10 @@ local function drawStatic()
   gpu.setBackground(C.bg)
   gpu.fill(1, 1, W, H, " ")
   put(1, 1, "  METEOR RITUAL CONTROLLER", C.text, C.title, W)
-  gpu.setBackground(C.divider)
-  gpu.fill(41, 2, 1, H - 2, " ")
-  header(1, 2, 40, "ADD METEOR TO QUEUE", "purple = quarry")
-  header(1, CTRL_HEADER, 40, "CONTROLS")
+  gpu.setBackground(C.card)
+  gpu.fill(RX - 1, 2, RW + 2, H - 2, " ")      -- right column is a card
+  header(1, 2, 40, "ADD METEOR TO QUEUE", "purple = quarry", C.quarry, C.bg)
+  header(1, CTRL_HEADER, 40, "CONTROLS", nil, nil, C.bg)
   header(RX, 2, RW, "STATUS")
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
@@ -914,14 +899,14 @@ local function drawStatus()
   for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid", "not in interface", "no me pattern", "canceled", "rejected"}) do
     if low:find(w, 1, true) then bad = true end
   end
-  put(RX, 4, " " .. status, bad and 0xFFAA33 or 0xFFFF88, C.bg, RW)
+  put(RX, 4, " " .. status, bad and 0xFFAA33 or 0xFFFF88, C.card, RW)
 
   local current = (queue[1] and queue[1].loc == "fired") and METEORS[queue[1].m].label or "-"
-  put(RX, 5, " Meteor: ", C.dim, C.bg, 9)
-  put(RX + 9, 5, current, C.text, C.bg, RW - 9)
+  put(RX, 5, " Meteor: ", C.dim, C.card, 9)
+  put(RX + 9, 5, current, C.text, C.card, RW - 9)
 
   drawBar(RX, 6, 32, 1, progress or 0, C.progress)
-  put(RX + 32, 6, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.bg, 6)
+  put(RX + 32, 6, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 6)
 end
 
 -- miners: 4 x 4 colored tiles
@@ -962,13 +947,13 @@ local function drawFluid()
   gpu.setForeground(C.text)
   gpu.setBackground(mark < fill and color or C.track)
   gpu.set(RX + mark, 15, "|")
-  put(RX, 16, " Needs " .. fmt(FLUID_START_MIN) .. " mB to summon a meteor", C.dim, C.bg, RW)
+  put(RX, 16, " Needs " .. fmt(FLUID_START_MIN) .. " mB to summon a meteor", C.dim, C.card, RW)
 end
 
 local function drawQueue()
   header(RX, 18, RW, "QUEUE", #queue .. " queued")
   for r = 1, QUEUE_ROWS do
-    local line, fg, bg, tag, tagColor = "", C.text, C.bg, nil, C.dim
+    local line, fg, bg, tag, tagColor = "", C.text, C.card, nil, C.dim
     local e = queue[r]
     if r == QUEUE_ROWS and #queue > QUEUE_ROWS then
       line, fg = "  ... +" .. (#queue - QUEUE_ROWS + 1) .. " more", C.dim
