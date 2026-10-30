@@ -30,7 +30,8 @@ local tp  = component.transposer
 
 -- ---- Catalyst chest and dropper (transposer sides) ----
 local CHEST_SIDE   = sides.west     -- chest with the catalysts
-local DROPPER_SIDE = sides.up       -- dropper above the ritual stone
+local DROPPER_SIDE = sides.up       -- dropper above the ritual stone (holds max 1 catalyst)
+local BUFFER_SIDE  = sides.east     -- buffer chest: catalysts of the queued meteors wait here
 
 -- ---- Redstone outputs ----
 -- side: side of the redstone component the signal comes out of.
@@ -62,8 +63,8 @@ local FLUID_START_MIN = 20000       -- mB needed to summon a new meteor
 local FLUID_RUN_MIN   = 1000        -- mB below which idle miners are not trusted
 local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 
--- ---- Meteors (max 4 with this screen layout) ----
--- label:    text on the button
+-- ---- Meteors (max 16 with this screen layout) ----
+-- label:    text on the button (max 15 characters)
 -- catalyst: item name of the catalyst
 --           (check with tp.getStackInSlot(CHEST_SIDE, slot).name)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
@@ -266,26 +267,98 @@ end
 -- ACTIONS
 -- =====================================================================
 
-local function findCatalyst(itemName)
-  local size = tp.getInventorySize(CHEST_SIDE)
+-- Runs f(...) and returns its (ok, reason) result; a Lua error becomes false + short text.
+local function safe(f, ...)
+  local ok, a, b = pcall(f, ...)
+  if not ok then return false, tostring(a):gsub("^.-:%d+: ", ""):sub(1, 34) end
+  return a, b
+end
+
+local function findStack(side, itemName)
+  local size = tp.getInventorySize(side)
   if not size then return nil end
   for slot = 1, size do
-    local stack = tp.getStackInSlot(CHEST_SIDE, slot)
+    local stack = tp.getStackInSlot(side, slot)
     if stack and stack.name == itemName then return slot end
   end
   return nil
 end
 
--- Moves one catalyst into the dropper and fires it. Returns true, or false + reason.
-local function dropCatalyst(meteorIdx)
-  local item = METEORS[meteorIdx].catalyst
-  local slot = findCatalyst(item)
-  if not slot then return false, "Missing catalyst: " .. item end
-  local moved = tp.transferItem(CHEST_SIDE, DROPPER_SIDE, 1, slot)
-  if not moved or moved == 0 then return false, "Dropper full / transfer failed" end
+local function isEmpty(side)
+  local size = tp.getInventorySize(side)
+  if not size then return false end
+  for slot = 1, size do
+    if tp.getStackInSlot(side, slot) then return false end
+  end
+  return true
+end
+
+-- Moves one item with the given name between two inventories.
+local function moveOne(fromSide, toSide, itemName)
+  local slot = findStack(fromSide, itemName)
+  if not slot then return false, "Missing catalyst: " .. itemName end
+  local moved = tp.transferItem(fromSide, toSide, 1, slot)
+  if not moved or moved == 0 then return false, "Transfer failed (target full?)" end
+  return true
+end
+
+local function hasLoc(loc)
+  for _, e in ipairs(queue) do
+    if e.loc == loc then return true end
+  end
+  return false
+end
+
+-- Queue entries: {m = meteor index, loc = "dropper" | "buffer" | "fired"}
+-- Clicking a meteor takes its catalyst out of the chest right away: into the dropper
+-- when the dropper is free, otherwise into the buffer chest.
+local function enqueueRaw(i)
+  if #queue >= 20 then return false, "Queue is full" end
+  local toDropper = (not hasLoc("buffer")) and isEmpty(DROPPER_SIDE)
+  local ok, err = moveOne(CHEST_SIDE, toDropper and DROPPER_SIDE or BUFFER_SIDE, METEORS[i].catalyst)
+  if not ok then return false, err end
+  queue[#queue + 1] = {m = i, loc = toDropper and "dropper" or "buffer"}
+  return true
+end
+
+local function enqueue(i)
+  local ok, err = safe(enqueueRaw, i)
+  if not ok then status = err end
+end
+
+-- Buffer -> dropper for an entry (only when the dropper is empty).
+local function promoteRaw(entry)
+  if entry.loc == "dropper" then return true end
+  if not isEmpty(DROPPER_SIDE) then return false, "Dropper not empty" end
+  local ok, err = moveOne(BUFFER_SIDE, DROPPER_SIDE, METEORS[entry.m].catalyst)
+  if not ok then return false, err end
+  entry.loc = "dropper"
+  return true
+end
+
+-- Keeps the dropper loaded with the next queued catalyst.
+local function refillDropper()
+  if hasLoc("dropper") then return end
+  for _, e in ipairs(queue) do
+    if e.loc == "buffer" then safe(promoteRaw, e); return end
+  end
+end
+
+-- Fires the dropper with the catalyst of an entry. Returns true, or false + reason.
+local function dropCatalyst(entry)
+  local ok, err = safe(promoteRaw, entry)
+  if not ok then return false, err end
   os.sleep(0.2)
   pulseOut("dropper", 0.3)
+  os.sleep(0.3)
+  entry.loc = "fired"
   return true
+end
+
+-- Puts the catalyst of a removed queue entry back into the chest.
+local function returnCatalyst(entry)
+  local from = (entry.loc == "dropper" and DROPPER_SIDE) or (entry.loc == "buffer" and BUFFER_SIDE)
+  if from then safe(moveOne, from, CHEST_SIDE, METEORS[entry.m].catalyst) end
 end
 
 local function startQuarry()
@@ -306,6 +379,10 @@ end
 
 -- Drops the catalyst of the first queued meteor. Returns true when it worked.
 local function summon(now)
+  if not queue[1] then
+    setState("idle", "Queue is empty")
+    return false
+  end
   local ok, err = dropCatalyst(queue[1])
   if not ok then
     status = err
@@ -396,7 +473,7 @@ local function stepMining(now)
   end
 
   -- every miner has been idle long enough: the meteor itself is mined
-  if METEORS[queue[1]].quarry then
+  if METEORS[queue[1].m].quarry then
     startQuarry()
     setState("quarry", "Ender Quarry started")
   else
@@ -514,18 +591,22 @@ local function drawButton(b)
   gpu.set(b.x + math.floor((b.w - len) / 2), b.y + math.floor(b.h / 2), label)
 end
 
-local function queueAdd(meteorIdx)
-  if #queue < 20 then queue[#queue + 1] = meteorIdx end
-end
+assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
 
-assert(#METEORS <= 4, "Screen layout has room for max. 4 meteors")
-
+-- meteor buttons: two columns of 8, filled column by column; purple = has quarry
+local METEOR_H = (VS > 1) and (VS - 1) or 1
 for i, m in ipairs(METEORS) do
+  local col = math.floor((i - 1) / 8)
+  local row = (i - 1) % 8
   addButton({
-    x = 2, y = Y(4 + (i - 1) * 3), w = 36, h = 2 * VS,
-    label = "+ " .. m.label .. (m.quarry and "  [quarry]" or ""),
-    color = function() return m.quarry and C.quarry or C.accent end,
-    action = function() queueAdd(i) end,
+    x = 2 + col * 19, y = Y(4 + row), w = 17, h = METEOR_H,
+    label = "+ " .. m.label,
+    color = function()
+      -- alternate shades so neighbouring rows stay distinguishable
+      if m.quarry then return (row % 2 == 0) and C.quarry or 0x55328A end
+      return (row % 2 == 0) and C.accent or 0x0F4F94
+    end,
+    action = function() enqueue(i) end,
   })
 end
 
@@ -540,8 +621,11 @@ addButton({
   x = PANEL_X + 21, y = Y(20), w = 19, h = 2 * VS, label = "CLEAR QUEUE",
   color = function() return 0x9E6B00 end,
   action = function()
-    -- the meteor currently being processed (first in queue) is kept
-    local keep = (state ~= "idle") and queue[1] or nil
+    -- the meteor already summoned (first in queue) is kept; the others go back to the chest
+    local keep = (queue[1] and queue[1].loc == "fired") and queue[1] or nil
+    for _, e in ipairs(queue) do
+      if e ~= keep then returnCatalyst(e) end
+    end
     queue = {}
     if keep then queue[1] = keep end
   end,
@@ -593,7 +677,7 @@ local function drawStatic()
   put(1, 1, "  METEOR RITUAL CONTROLLER", C.text, C.title, W)
   gpu.setBackground(C.divider)
   gpu.fill(39, 2, 1, H - 1, " ")
-  header(2, Y(3), 36, "ADD METEOR TO QUEUE")
+  header(2, Y(3), 36, "ADD METEOR TO QUEUE", "purple = quarry")
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
 end
@@ -661,30 +745,38 @@ local function drawStatus()
   end
   put(PANEL_X, Y(17), " " .. status, bad and 0xFFAA33 or 0xFFFF88, C.bg, 40)
 
-  local current = (state ~= "idle" and queue[1]) and METEORS[queue[1]].label or "-"
+  local current = (queue[1] and queue[1].loc == "fired") and METEORS[queue[1].m].label or "-"
   put(PANEL_X, Y(18), " Current meteor: ", C.dim, C.bg, 17)
   put(PANEL_X + 17, Y(18), current, C.text, C.bg, 23)
 
   drawBar(PANEL_X, Y(19), 40, 1, progress or 0, C.progress)
 end
 
+local QUEUE_ROWS = 11
+
 local function drawQueue()
-  header(2, Y(17), 36, "QUEUE", #queue .. " queued")
-  for r = 1, 7 do
-    local line, fg, bg = "", C.text, C.bg
-    if r == 7 and #queue > 7 then
-      line, fg = " ... +" .. (#queue - 6) .. " more", C.dim
-    elseif queue[r] then
-      local mt = METEORS[queue[r]]
-      line = string.format(" %d. %s%s", r, mt.label, mt.quarry and "  [quarry]" or "")
-      if r == 1 and state ~= "idle" then
-        line = line .. "  << ACTIVE"
-        fg, bg = 0x66E0FF, C.hilite
+  header(2, Y(13), 36, "QUEUE", #queue .. " queued")
+  for r = 1, QUEUE_ROWS do
+    local line, fg, bg, tag, tagColor = "", C.text, C.bg, nil, C.dim
+    local e = queue[r]
+    if r == QUEUE_ROWS and #queue > QUEUE_ROWS then
+      line, fg = " ... +" .. (#queue - QUEUE_ROWS + 1) .. " more", C.dim
+    elseif e then
+      local mt = METEORS[e.m]
+      line = string.format(" %2d. %s", r, mt.label)
+      if mt.quarry then fg = 0xD0A8FF end
+      if e.loc == "fired" then
+        tag, tagColor, bg = "ACTIVE", 0x66E0FF, C.hilite
+      elseif e.loc == "dropper" then
+        tag = "in dropper"
+      else
+        tag = "in buffer"
       end
     elseif r == 1 then
       line, fg = " (queue is empty)", C.dim
     end
-    put(2, Y(17 + r), line, fg, bg, 36)
+    put(2, Y(13 + r), line, fg, bg, 36)
+    if tag then put(2 + 36 - #tag - 1, Y(13 + r), tag, tagColor, bg) end
   end
 end
 
@@ -714,6 +806,7 @@ local function main()
     if ev and handleTouch(x, y) == "exit" then return end
     pollHardware(computer.uptime())
     if running then step() end
+    refillDropper()
     drawDynamic()
   end
 end
