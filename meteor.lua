@@ -29,8 +29,8 @@ local tp  = component.transposer
 -- =====================================================================
 
 -- ---- Catalyst chest and dropper (transposer sides) ----
-local CHEST_SIDE   = sides.west     -- chest with the catalysts
-local DROPPER_SIDE = sides.up       -- dropper above the ritual stone (holds max 1 catalyst)
+local CHEST_SIDE   = sides.up       -- chest with the catalysts (above the transposer)
+local DROPPER_SIDE = sides.down     -- dropper (below the transposer, holds max 1 catalyst)
 local BUFFER_SIDE  = sides.east     -- buffer chest: catalysts of the queued meteors wait here
 
 -- ---- Redstone outputs ----
