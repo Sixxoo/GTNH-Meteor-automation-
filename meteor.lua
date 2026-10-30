@@ -187,6 +187,8 @@ local status = "Ready"        -- one-line message shown on screen
 local retryAt = 0             -- idle: do not retry the catalyst drop before this time
 local pulsed = false          -- miners' start pulse already sent for this meteor
 local pulseAt = nil           -- uptime of that pulse
+local finishedAt = nil        -- uptime when the last meteor was fully mined
+local curHasQuarry = nil      -- does the meteor being processed have a filler step
 local ritualStarted = false   -- ritual start pulse already sent (once per program run)
 local idleSince = nil         -- uptime since when all miners have been OFF
 local fluid = nil             -- Drilling Fluid in ME (mB), nil = unknown
@@ -568,6 +570,8 @@ local function summon(now)
   end
   pulsed = false
   pulseAt = nil
+  finishedAt = nil
+  curHasQuarry = METEORS[queue[1].m].quarry and true or false
   for _, m in ipairs(MINERS) do m.worked = false; m.failed = false end
   setState("wait_start", "Meteor summoned, starting miners soon")
   return true
@@ -691,6 +695,7 @@ end
 local function stepFinish()
   table.remove(queue, 1)
   idleSince = nil
+  finishedAt = computer.uptime()
   setState("idle", "Meteor fully mined")
 end
 
@@ -740,7 +745,8 @@ local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
 local BH = math.max(2, math.floor((CTRL_Y - 4) / 8))   -- height of one meteor button
-local QUEUE_Y = 18                             -- queue card: rows 18 .. H-1
+local STATE_Y, MINERS_Y, FLUID_Y = 3, 10, 16    -- card tops (state 3-9, miners 10-15, fluid 16-18)
+local QUEUE_Y = 19                             -- queue card: rows 19 .. H-1
 local QUEUE_ROWS = H - 2 - (QUEUE_Y + 1) + 1   -- content rows of the queue card
 
 local function put(x, y, text, fg, bg, width)
@@ -767,6 +773,7 @@ local CH = {
   bl = unicode.char(0x2514), br = unicode.char(0x2518),
   h  = unicode.char(0x2500), v  = unicode.char(0x2502),
   hh = unicode.char(0x2501), vv = unicode.char(0x2503),
+  dot = unicode.char(0x25CF), ring = unicode.char(0x25CB), check = unicode.char(0x2713),
 }
 
 -- ---------- colors (neon on near-black) ----------
@@ -977,9 +984,9 @@ local function drawStatic()
   put(1, 3, "ADD METEOR TO QUEUE", C.red, C.bg)
   put(21, 3, string.rep(CH.h, 19), C.line, C.bg)
   -- cards
-  cardFrame(RX, 3, RW, 5, "STATE")
-  cardFrame(RX, 8, RW, 6, "GT MINERS")
-  cardFrame(RX, 14, RW, 4, "DRILLING FLUID")
+  cardFrame(RX, STATE_Y, RW, 7, "STATE")
+  cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
+  cardFrame(RX, FLUID_Y, RW, 3, "DRILLING FLUID")
   cardFrame(RX, QUEUE_Y, RW, H - QUEUE_Y, "QUEUE")
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
@@ -991,18 +998,53 @@ local function drawTitle()
   put(W - #label - 1, 1, label, color, C.bg)
 end
 
+-- Phase of the current meteor: 0 none, 1 summoning, 2 GT miners, 3 filler blocks (Ender Quarry),
+-- 4 finishing, 5 meteor mined (kept until the next meteor starts).
+local function currentPhase()
+  if state == "ritual" then return 1 end
+  if state == "wait_start" or state == "mining" then return 2 end
+  if state == "quarry" then return 3 end
+  if state == "finish" then return 4 end
+  if finishedAt and computer.uptime() - finishedAt < 8 then return 5 end
+  if running and queue[1] and queue[1].loc ~= "fired" then return 1 end
+  return finishedAt and 5 or 0          -- stays on "Meteor mined" until the next meteor starts
+end
+
+local PHASE_NAMES = {"Summoning meteor", "Mining - GT Miners", "Mining filler blocks", "Meteor mined"}
+
 local function drawStatus()
-  put(RX + 2, 4, spaced(STATE_BIG[state] or state), STATE_COLOR[state] or C.text, C.card, RW - 4)
+  local phase = currentPhase()
+  local hasQuarry
+  if phase == 5 then
+    hasQuarry = curHasQuarry
+  else
+    hasQuarry = queue[1] and METEORS[queue[1].m].quarry or false
+  end
+  for k = 1, 4 do
+    local y = STATE_Y + k
+    local mark, markColor, text, textColor = CH.ring, C.dim, PHASE_NAMES[k], C.dim
+    if k == 3 and not hasQuarry and phase >= 2 then
+      mark, text = "-", "No filler blocks"            -- nothing for the Ender Quarry to do
+    elseif phase == 5 or phase > k then
+      mark, markColor, textColor = CH.check, C.green, 0xB8C4D0
+    elseif phase == k then
+      mark, markColor, textColor = CH.dot, C.yellow, C.text
+    end
+    put(RX + 2, y, mark, markColor, C.card)
+    put(RX + 4, y, text, textColor, C.card, 20)
+    if phase == k and progress then
+      drawThin(RX + 25, y, 11, progress, C.neon)
+    else
+      put(RX + 25, y, "", C.dim, C.card, 11)
+    end
+  end
 
   local bad = false
   local low = status:lower()
   for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid", "not in interface", "no me pattern", "canceled", "rejected"}) do
     if low:find(w, 1, true) then bad = true end
   end
-  put(RX + 2, 5, status, bad and C.amber or C.text, C.card, RW - 4)
-
-  drawThin(RX + 2, 6, 29, progress or 0, C.neon)
-  put(RX + 32, 6, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 5)
+  put(RX + 2, STATE_Y + 5, status, bad and C.amber or C.dim, C.card, RW - 4)
 end
 
 -- miners: 4 x 4 neon status lights, numbered down each column (M01-M04, M05-M08, ...)
@@ -1028,33 +1070,33 @@ local function drawMiners()
       tag, color = "OK", C.green
       nOk = nOk + 1
     end
-    local x, y = RX + 2 + c * 9, 9 + r
+    local x, y = RX + 2 + c * 9, MINERS_Y + 1 + r
     put(x, y, m.name, C.text, C.card, 3)
     put(x + 4, y, tag, color, C.card, 3)
   end
   -- counters in the card title: ON always yellow, OK always green, OFF always red
-  cardTop(RX, 8, RW, "GT MINERS")
+  cardTop(RX, MINERS_Y, RW, "GT MINERS")
   local sOn, sOk, sOff = nOn .. " ON", nOk .. " OK", nOff .. " OFF"
   local total = #sOn + #sOk + #sOff + 4          -- 2 spaces between the counters
   local x0 = RX + RW - 3 - total
-  put(x0 - 1, 8, string.rep(" ", total + 2), C.text, C.card)
-  put(x0, 8, sOn, C.yellow, C.card)
-  put(x0 + #sOn + 2, 8, sOk, C.green, C.card)
-  put(x0 + #sOn + #sOk + 4, 8, sOff, C.red, C.card)
+  put(x0 - 1, MINERS_Y, string.rep(" ", total + 2), C.text, C.card)
+  put(x0, MINERS_Y, sOn, C.yellow, C.card)
+  put(x0 + #sOn + 2, MINERS_Y, sOk, C.green, C.card)
+  put(x0 + #sOn + #sOk + 4, MINERS_Y, sOff, C.red, C.card)
 end
 
 local function drawFluid()
   local enough = fluid and fluid >= FLUID_START_MIN
   local right
   if fluid then right = fmt(fluid) .. " mB" else right = "N/A [" .. (fluidNote or "?") .. "]" end
-  cardTop(RX, 14, RW, "DRILLING FLUID", right,
+  cardTop(RX, FLUID_Y, RW, "DRILLING FLUID", right,
     fluid and (enough and C.green or C.red) or C.amber)
   local barW = RW - 4
   local color = enough and C.neon or C.red
-  drawThin(RX + 2, 16, barW, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
+  drawThin(RX + 2, FLUID_Y + 1, barW, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
   -- tick mark = minimum needed to summon a meteor
   local mark = math.min(barW - 1, math.floor(FLUID_START_MIN / FLUID_BAR_MAX * barW))
-  put(RX + 2 + mark, 16, CH.vv, C.red, C.card)
+  put(RX + 2 + mark, FLUID_Y + 1, CH.vv, C.red, C.card)
 end
 
 local function drawQueue()
