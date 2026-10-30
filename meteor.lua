@@ -29,7 +29,7 @@ local tp  = component.transposer
 -- =====================================================================
 
 -- ---- Catalyst chest and dropper (transposer sides) ----
-local CHEST_SIDE   = sides.up       -- chest with the catalysts (above the transposer)
+local CHEST_SIDE   = sides.up       -- ME Interface with the catalysts (above the transposer)
 local DROPPER_SIDE = sides.down     -- dropper (below the transposer, holds max 1 catalyst)
 
 -- ---- Redstone outputs ----
@@ -75,10 +75,11 @@ local METEORS = {
 }
 
 -- ---- Crafting the catalysts in the ME system ----
--- When the chest does not hold the catalyst of a clicked meteor, a crafting request
--- (1 piece) is sent to the ME system. The ME system must deliver the crafted item into
--- the catalyst chest (e.g. an export bus or an ME interface next to the chest).
--- The meteor waits in the queue ("crafting") until the craft is done.
+-- The catalysts are taken by the transposer from the ME Interface above it (the
+-- Interface must show them in its slots, e.g. through its configuration).
+-- When the ME network does not hold the catalyst of a clicked meteor, a crafting request
+-- (1 piece) is sent to the ME system. The meteor waits in the queue ("crafting") until
+-- the craft is done and the item shows up in the Interface.
 local CRAFT_MISSING = true      -- false: a missing catalyst is simply refused
 local CRAFT_RETRY   = 10        -- seconds before a failed or canceled craft is requested again
 
@@ -304,7 +305,7 @@ end
 -- Moves one item with the given name between two inventories.
 local function moveOne(fromSide, toSide, itemName)
   local slot = findStack(fromSide, itemName)
-  if not slot then return false, "Missing catalyst: " .. itemName end
+  if not slot then return false, "Not in interface: " .. itemName end
   local moved = tp.transferItem(fromSide, toSide, 1, slot)
   if not moved or moved == 0 then return false, "Transfer failed (target full?)" end
   return true
@@ -349,6 +350,18 @@ local function requestCraft(entry)
   return true
 end
 
+-- How many of an item the whole ME network holds (0 if it cannot be read).
+local function countNetwork(mt)
+  if not me or not me.getItemsInNetwork then return 0 end
+  local filter = {name = mt.catalyst}
+  if mt.damage then filter.damage = mt.damage end
+  local ok, list = pcall(me.getItemsInNetwork, filter)
+  if not ok or type(list) ~= "table" then return 0 end
+  local total = 0
+  for _, it in ipairs(list) do total = total + (it.size or 1) end
+  return total
+end
+
 local function waitingBefore()
   for _, e in ipairs(queue) do
     if e.loc == "chest" or e.loc == "crafting" then return true end
@@ -359,22 +372,27 @@ end
 local function enqueueRaw(i)
   if #queue >= 20 then return false, "Queue is full" end
   local item = METEORS[i].catalyst
-  local reserved = 0
+  local reserved = 0            -- same catalyst already claimed by other queue entries
   for _, e in ipairs(queue) do
-    if e.loc == "chest" and METEORS[e.m].catalyst == item then reserved = reserved + 1 end
+    if e.loc ~= "fired" and METEORS[e.m].catalyst == item then reserved = reserved + 1 end
   end
   local entry = {m = i, loc = "chest"}
 
-  if countItem(CHEST_SIDE, item) <= reserved then
-    -- not in stock
+  local inInterface = countItem(CHEST_SIDE, item)
+  if inInterface > reserved then
+    -- visible in the Interface right now: load the dropper if nothing waits before it
+    if not waitingBefore() and not hasLoc("dropper") and isEmpty(DROPPER_SIDE) then
+      local ok, err = moveOne(CHEST_SIDE, DROPPER_SIDE, item)
+      if not ok then return false, err end
+      entry.loc = "dropper"
+    end
+  elseif countNetwork(METEORS[i]) > reserved then
+    -- the ME network has it but it is not in the Interface yet: wait for it to appear
+    entry.loc = "chest"
+  else
     if not CRAFT_MISSING then return false, "Missing catalyst: " .. item end
     entry.loc = "crafting"
     entry.nextTry = 0          -- the craft request is sent from the main loop
-  elseif not waitingBefore() and not hasLoc("dropper") and isEmpty(DROPPER_SIDE) then
-    -- nothing waits before it and the dropper is free: load the dropper now
-    local ok, err = moveOne(CHEST_SIDE, DROPPER_SIDE, item)
-    if not ok then return false, err end
-    entry.loc = "dropper"
   end
   queue[#queue + 1] = entry
   return true
