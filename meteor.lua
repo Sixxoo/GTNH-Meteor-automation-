@@ -1032,8 +1032,15 @@ local function drawMiners()
     put(x, y, m.name, C.text, C.card, 3)
     put(x + 4, y, tag, color, C.card, 3)
   end
-  cardTop(RX, 8, RW, "GT MINERS", nOn .. " ON  " .. nOk .. " OK  " .. nOff .. " OFF",
-    nOff > 0 and C.red or (nOn > 0 and C.yellow or C.green))
+  -- counters in the card title: ON always yellow, OK always green, OFF always red
+  cardTop(RX, 8, RW, "GT MINERS")
+  local sOn, sOk, sOff = nOn .. " ON", nOk .. " OK", nOff .. " OFF"
+  local total = #sOn + #sOk + #sOff + 4          -- 2 spaces between the counters
+  local x0 = RX + RW - 3 - total
+  put(x0 - 1, 8, string.rep(" ", total + 2), C.text, C.card)
+  put(x0, 8, sOn, C.yellow, C.card)
+  put(x0 + #sOn + 2, 8, sOk, C.green, C.card)
+  put(x0 + #sOn + #sOk + 4, 8, sOff, C.red, C.card)
 end
 
 local function drawFluid()
