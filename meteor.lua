@@ -57,7 +57,7 @@ local MINER_ADDRS = {
 }
 
 -- ---- Drilling Fluid in the ME system ----
-local FLUID_MATCH     = "drilling"  -- lowercase text searched in fluid name/label
+local FLUID_MATCH     = "Drilling Fluid"  -- searched in fluid label/name (case, spaces, _ ignored)
 local FLUID_START_MIN = 20000       -- mB needed to summon a new meteor
 local FLUID_RUN_MIN   = 1000        -- mB below which idle miners are not trusted
 local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
@@ -116,6 +116,15 @@ local function findProxy(prefix, types)
   return nil
 end
 
+-- Same, but accepts a component of any type.
+local function findAnyProxy(prefix)
+  if not prefix then return nil end
+  for addr in component.list() do
+    if addr:sub(1, #prefix) == prefix then return component.proxy(addr) end
+  end
+  return nil
+end
+
 -- GT miners
 local MINERS = {}
 for i, addr in ipairs(MINER_ADDRS) do
@@ -125,7 +134,7 @@ for i, addr in ipairs(MINER_ADDRS) do
 end
 
 -- ME system
-local me = findProxy(ME_ADDR, {"me_controller", "me_interface"})
+local me = findProxy(ME_ADDR, {"me_controller", "me_interface"}) or findAnyProxy(ME_ADDR)
 
 -- Redstone outputs
 for name, o in pairs(OUT) do
@@ -165,6 +174,7 @@ local pulsed = false          -- miners' start pulse already sent for this meteo
 local ritualStarted = false   -- ritual start pulse already sent (once per program run)
 local idleSince = nil         -- uptime since when all miners have been OFF
 local fluid = nil             -- Drilling Fluid in ME (mB), nil = unknown
+local fluidNote = nil         -- short reason shown when fluid is unknown
 local nextFluidPoll = 0
 local minersOk = false        -- every miner answered the last poll
 
@@ -191,14 +201,27 @@ end
 -- READING THE WORLD
 -- =====================================================================
 
+-- lowercase, letters and digits only: "Drilling Fluid" and "liquid_drillingfluid" both contain "drillingfluid"
+local function normalize(s)
+  return (tostring(s):lower():gsub("[^%w]", ""))
+end
+
+-- Returns the Drilling Fluid amount in mB, or nil plus a short reason.
 local function readFluid()
-  if not me then return nil end
+  if not me then return nil, "ME not found" end
+  if not me.getFluidsInNetwork then return nil, "no fluid method" end
   local ok, list = pcall(me.getFluidsInNetwork)
-  if not ok or type(list) ~= "table" then return nil end
+  if not ok then
+    local msg = tostring(list):gsub("^.-:%d+: ", "")
+    return nil, msg:sub(1, 18)
+  end
+  if type(list) ~= "table" then return nil, "bad data" end
+  local wanted = normalize(FLUID_MATCH)
   local total = 0
   for _, f in ipairs(list) do
-    local text = ((f.label or "") .. " " .. (f.name or "")):lower()
-    if text:find(FLUID_MATCH, 1, true) then total = total + (f.amount or 0) end
+    if normalize((f.label or "") .. (f.name or "")):find(wanted, 1, true) then
+      total = total + (f.amount or 0)
+    end
   end
   return total
 end
@@ -218,7 +241,7 @@ local function pollHardware(now)
     if m.active == nil then minersOk = false end
   end
   if now >= nextFluidPoll then
-    fluid = readFluid()
+    fluid, fluidNote = readFluid()
     nextFluidPoll = now + 5
   end
 end
@@ -557,7 +580,12 @@ local function drawMiners()
 end
 
 local function drawFluid()
-  local text = fluid and (fmt(fluid) .. " mB") or "N/A"
+  local text
+  if fluid then
+    text = fmt(fluid) .. " mB"
+  else
+    text = "N/A [" .. (fluidNote or "?") .. "]"
+  end
   put(PANEL_X, Y(13), "Drilling Fluid: " .. text, 0xFFFF00, 0x000000, 40)
   local barW = 36
   local fill = 0
