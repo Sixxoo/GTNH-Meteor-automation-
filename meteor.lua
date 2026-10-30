@@ -756,7 +756,7 @@ local CH = {
 -- ---------- colors (neon on near-black) ----------
 local C = {
   bg = 0x03050A, card = 0x090C14, face = 0x0B0F18,
-  neon = 0x00B4FF, red = 0xFF2A3D, green = 0x00E5A0, amber = 0xFFB020,
+  neon = 0x00B4FF, red = 0xFF2A3D, green = 0x2BE05A, amber = 0xFFB020,
   text = 0xFFFFFF, dim = 0x6B7A8F, track = 0x1E2C40, line = 0x14507A,
 }
 
@@ -767,7 +767,7 @@ local STATE_BIG = {
 
 local STATE_COLOR = {
   idle = 0xB0BCCB, ritual = 0xFF2A3D, wait_start = 0xFFB020,
-  mining = 0x00B4FF, quarry = 0xFF2A3D, finish = 0x00E5A0,
+  mining = 0x00B4FF, quarry = 0xFF2A3D, finish = 0x2BE05A,
 }
 
 local function spaced(text)
@@ -859,7 +859,7 @@ addButton({
 
 addButton({
   x = 31, y = CTRL_Y, w = 10, h = 3, outline = true, label = "EXIT",
-  color = function() return C.dim end,
+  color = function() return C.red end,
   id = "exit",
 })
 
@@ -919,6 +919,7 @@ local function drawStatic()
   put(8, 1, "E", C.red, C.bg)
   put(9, 1, " O R", C.text, C.bg)
   put(15, 1, "R I T U A L", C.dim, C.bg)
+  put(27, 1, "by Sixxo", C.neon, C.bg)
   put(1, 2, string.rep(CH.h, W), C.line, C.bg)
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
