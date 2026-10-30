@@ -71,10 +71,11 @@ local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 -- damage:   optional item damage / metadata (only used to find the ME crafting pattern)
 --           (check with tp.getStackInSlot(sides.up, slot).name)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
+-- A meteor whose label is still "Meteor N" or "Slot N" counts as not set up and cannot be queued.
 local METEORS = {
   {label = "Exquisite Diamond", catalyst = "Exquisite Diamond", quarry = false},
-  {label = "Meteor 2", catalyst = "minecraft:gold_block",    quarry = true},
-  {label = "Meteor 3", catalyst = "minecraft:diamond_block", quarry = true},
+  {label = "Slot 2",   catalyst = "minecraft:gold_block",    quarry = true},
+  {label = "Slot 3",   catalyst = "minecraft:diamond_block", quarry = true},
 }
 
 -- ---- Crafting the catalysts in the ME system ----
@@ -842,18 +843,19 @@ end
 assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
 
 -- 16 meteor cells: two columns of 8. Set-up meteors (catalyst given and renamed from the default
--- "Meteor N") are buttons (stripe is red for an Ender Quarry meteor); all other cells stay dim
+-- "Meteor N" / "Slot N") are buttons (stripe is red for an Ender Quarry meteor); all other cells stay dim
 -- and cannot be queued.
 for i = 1, 16 do
   local m = METEORS[i]
   -- a meteor is usable once it has a catalyst and has been renamed from the default "Meteor N"
-  local ready = m and m.catalyst and m.catalyst ~= "" and not tostring(m.label):match("^Meteor %d+$")
+  local lbl = m and tostring(m.label) or ""
+  local ready = m and m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
   local col = math.floor((i - 1) / 8)
   local row = (i - 1) % 8
   addButton({
     x = 1 + col * 20, y = 4 + row * BH, w = 20, h = BH,
     empty = not ready,
-    label = m and m.label or ("slot " .. i),
+    label = m and m.label or ("Slot " .. i),
     stripe = function()
       if not ready then return C.track end
       return m.quarry and C.red or C.neon
@@ -958,8 +960,7 @@ local function drawStatic()
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
   put(1, 3, "ADD METEOR TO QUEUE", C.red, C.bg)
-  put(21, 3, string.rep(CH.h, 9), C.line, C.bg)
-  put(31, 3, "red=quarry", C.dim, C.bg)
+  put(21, 3, string.rep(CH.h, 19), C.line, C.bg)
   -- cards
   cardFrame(RX, 3, RW, 5, "STATE")
   cardFrame(RX, 8, RW, 6, "GT MINERS")
@@ -1021,7 +1022,6 @@ local function drawFluid()
   if fluid then right = fmt(fluid) .. " mB" else right = "N/A [" .. (fluidNote or "?") .. "]" end
   cardTop(RX, 14, RW, "DRILLING FLUID", right,
     fluid and (enough and C.green or C.red) or C.amber)
-  put(RX + 2, 15, "needs " .. fmt(FLUID_START_MIN) .. " mB to summon a meteor", C.dim, C.card, RW - 4)
   local barW = RW - 4
   local color = enough and C.neon or C.red
   drawThin(RX + 2, 16, barW, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
@@ -1051,8 +1051,6 @@ local function drawQueue()
       else
         tag = "waiting"
       end
-    elseif r == 1 then
-      line, fg = "  (queue is empty)", C.dim
     end
     local y = QUEUE_Y + r
     put(RX + 2, y, line, fg, C.card, RW - 4)
