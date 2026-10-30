@@ -65,7 +65,7 @@ local FLUID_RUN_MIN   = 1000        -- mB below which idle miners are not truste
 local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 
 -- ---- Meteors (max 16 with this screen layout) ----
--- label:    text on the button (max 15 characters)
+-- label:    text on the button (max 17 characters)
 -- catalyst: the catalyst, either the internal name ("modid:item") or the name shown
 --           in the game ("Exquisite Diamond"); a text with ':' is taken as internal name
 -- damage:   optional item damage / metadata (only used to find the ME crafting pattern)
@@ -192,6 +192,23 @@ local nextFluidPoll = 0
 local minersOk = false        -- every miner answered the last poll
 local progress = nil          -- 0..1 progress of a timed step (nil = none)
 
+-- Event log (newest first) and the last user action, both shown on the screen.
+local events = {}
+local lastAction = nil           -- {text, at} of the latest touch action
+
+local function nowText()
+  local ok, t = pcall(os.date, "%H:%M")
+  if ok and t then return t end
+  local m = math.floor(computer.uptime() / 60)
+  return string.format("%02d:%02d", math.floor(m / 60) % 24, m % 60)
+end
+
+local function logEvent(text, color, isAction)
+  table.insert(events, 1, {t = nowText(), text = text, color = color or 0xDDDDDD})
+  if #events > 60 then events[#events] = nil end
+  if isAction then lastAction = {text = text, at = computer.uptime()} end
+end
+
 local STATE_LABEL = {
   idle       = "Waiting for next meteor",
   ritual     = "Starting ritual",
@@ -206,6 +223,7 @@ local function setState(newState, message)
   stateSince = computer.uptime()
   progress = nil
   if message then status = message end
+  logEvent(message or STATE_LABEL[newState] or newState, 0x9FD8FF)
 end
 
 local function elapsed(now)
@@ -424,7 +442,14 @@ end
 
 local function enqueue(i)
   local ok, err = safe(enqueueRaw, i)
-  if not ok then status = err end
+  if not ok then
+    status = err
+    logEvent(METEORS[i].label .. ": " .. tostring(err), 0xFFAA33, true)
+    return
+  end
+  local e = queue[#queue]
+  local where = (e.loc == "dropper" and "in dropper") or (e.loc == "crafting" and "crafting") or "waiting"
+  logEvent("Queued: " .. METEORS[i].label .. " (" .. where .. ")", 0x55DDFF, true)
 end
 
 -- Chest -> dropper for an entry (only when the dropper is empty).
@@ -456,6 +481,7 @@ local function updateCrafts(now)
           local ok, err = safe(requestCraft, e)
           if ok then
             e.note = nil
+            logEvent("Craft requested: " .. METEORS[e.m].label, 0xFFCC66)
           else
             e.note = err
             e.nextTry = now + CRAFT_RETRY
@@ -467,9 +493,11 @@ local function updateCrafts(now)
         if okC and canceled then
           e.craft = nil
           e.note = "Craft canceled, retrying"
+          logEvent("Craft canceled: " .. METEORS[e.m].label, 0xFFAA33)
           e.nextTry = now + CRAFT_RETRY
         elseif okD and done then
           e.craft = nil
+          logEvent("Craft done: " .. METEORS[e.m].label, 0x66FF66)
           e.loc = "chest"      -- the item should arrive in the chest; loading retries until it does
         end
       end
@@ -580,12 +608,14 @@ local function stepWaitStart(now)
     pulseOut("miners", MINERS_PULSE)
     pulsed = true
     status = "Start signal sent, waiting for miners"
+    logEvent("Miners start signal sent", 0x9FD8FF)
   elseif elapsed(now) > START_TIMEOUT then
     -- stay in this state; START sends the signal again
     running = false
     pulsed = false
     stateSince = now
     status = "TIMEOUT - press START to retry"
+    logEvent("Timeout: miners did not start", 0xFFAA33)
   end
 end
 
@@ -663,10 +693,15 @@ end
 -- USER INTERFACE
 -- =====================================================================
 
-local PANEL_X = 40            -- left panel: x 2..37, right panel: x 40..79
+-- Layout (80 columns, 25+ rows):
+--   row 1        title bar: clock, step progress, current step, RUNNING / STOPPED
+--   rows 2-10    left: GT miners          right: Drilling Fluid + status
+--   rows 11-15   meteor buttons (4 x 4 grid)
+--   row 16-      left: queue              right: event log   (extra rows on taller screens)
+--   last 3 rows  footer buttons, then the "last action" line
+local LIST_TOP = 17
 
--- The layout is designed for 80x25. On a taller screen the extra rows are used
--- for spacing: every layout row n is placed at screen row Y(n).
+-- Picks the screen resolution: 80 columns, rows from the screen's shape.
 local function fitResolution()
   local maxW, maxH = gpu.maxResolution()
   if RESOLUTION then
@@ -685,11 +720,7 @@ local function fitResolution()
 end
 
 local W, H = fitResolution()
-local VS = math.max(1, math.floor(H / 25))     -- vertical scale of the layout
-
-local function Y(n)
-  return (n - 1) * VS + 1
-end
+local LIST_ROWS = H - 3 - LIST_TOP + 1       -- last list row is H-3 (footer buttons below)
 
 local function put(x, y, text, fg, bg, width)
   text = tostring(text)
@@ -717,9 +748,9 @@ local C = {
   accent = 0x1565C0, quarry = 0x6A3FA0, hilite = 0x0B3C55, progress = 0x2196F3,
 }
 
-local STATE_COLOR = {
-  idle = 0x4A4A4A, ritual = 0x7B3FA0, wait_start = 0xB87400,
-  mining = 0x1565C0, quarry = 0x6A3FA0, finish = 0x2E9E3E,
+local STATE_TEXT = {
+  idle = 0xAAAAAA, ritual = 0xCC88FF, wait_start = 0xFFAA33,
+  mining = 0x55AAFF, quarry = 0xCC88FF, finish = 0x66FF66,
 }
 
 -- ---------- buttons ----------
@@ -730,27 +761,28 @@ local function addButton(b)
   return b
 end
 
-local function drawButton(b)
-  gpu.setBackground(b.color and b.color() or 0x444444)
-  gpu.setForeground(0xFFFFFF)
+-- pressed = true draws the white "touched" flash
+local function drawButton(b, pressed)
+  local bg = pressed and 0xFFFFFF or (b.color and b.color() or 0x444444)
+  gpu.setBackground(bg)
+  gpu.setForeground(pressed and 0x000000 or 0xFFFFFF)
   gpu.fill(b.x, b.y, b.w, b.h, " ")
   local label = type(b.label) == "function" and b.label() or b.label
+  label = unicode.sub(label, 1, b.w)
   local len = unicode.len(label)
-  gpu.set(b.x + math.floor((b.w - len) / 2), b.y + math.floor(b.h / 2), label)
+  gpu.set(b.x + math.floor((b.w - len) / 2), b.y + math.floor((b.h - 1) / 2), label)
 end
 
 assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
 
--- meteor buttons: two columns of 8, filled column by column; purple = has quarry
-local METEOR_H = (VS > 1) and (VS - 1) or 1
+-- meteor buttons: 4 x 4 grid, filled column by column; purple = has quarry
 for i, m in ipairs(METEORS) do
-  local col = math.floor((i - 1) / 8)
-  local row = (i - 1) % 8
+  local col = math.floor((i - 1) / 4)
+  local row = (i - 1) % 4
   addButton({
-    x = 2 + col * 19, y = Y(4 + row), w = 17, h = METEOR_H,
+    x = 1 + col * 20, y = 12 + row, w = 19, h = 1,
     label = "+ " .. m.label,
     color = function()
-      -- alternate shades so neighbouring rows stay distinguishable
       if m.quarry then return (row % 2 == 0) and C.quarry or 0x55328A end
       return (row % 2 == 0) and C.accent or 0x0F4F94
     end,
@@ -759,38 +791,47 @@ for i, m in ipairs(METEORS) do
 end
 
 local startBtn = addButton({
-  x = PANEL_X, y = Y(20), w = 19, h = 2 * VS,
+  x = 1, y = H - 3, w = 19, h = 2,
   label = function() return running and "STOP" or "START" end,
   color = function() return running and C.bad or C.good end,
-  action = function() running = not running end,
-})
-
-addButton({
-  x = PANEL_X + 21, y = Y(20), w = 19, h = 2 * VS, label = "CLEAR QUEUE",
-  color = function() return 0x9E6B00 end,
   action = function()
-    -- the meteor already summoned (first in queue) is kept; the others go back to the chest
-    local keep = (queue[1] and queue[1].loc == "fired") and queue[1] or nil
-    for _, e in ipairs(queue) do
-      if e ~= keep then returnCatalyst(e) end
-    end
-    queue = {}
-    if keep then queue[1] = keep end
+    running = not running
+    logEvent(running and "Started" or "Stopped", running and 0x66FF66 or 0xFF7777, true)
   end,
 })
 
 addButton({
-  x = PANEL_X, y = Y(23), w = 19, h = 2 * VS, label = "EXIT",
+  x = 21, y = H - 3, w = 19, h = 2, label = "CLEAR QUEUE",
+  color = function() return 0x9E6B00 end,
+  action = function()
+    -- the meteor already summoned (first in queue) is kept; the others go back to the Interface
+    local keep = (queue[1] and queue[1].loc == "fired") and queue[1] or nil
+    local removed = 0
+    for _, e in ipairs(queue) do
+      if e ~= keep then returnCatalyst(e); removed = removed + 1 end
+    end
+    queue = {}
+    if keep then queue[1] = keep end
+    logEvent("Queue cleared (" .. removed .. " removed)", 0xFFCC66, true)
+  end,
+})
+
+addButton({
+  x = 61, y = H - 3, w = 19, h = 2, label = "EXIT",
   color = function() return 0x555555 end,
   id = "exit",
 })
 
--- Returns "exit" when the EXIT button was pressed.
+-- Flashes the touched button, then runs its action. Returns "exit" for EXIT.
 local function handleTouch(x, y)
   for _, b in ipairs(buttons) do
     if x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h then
+      drawButton(b, true)
+      os.sleep(0.15)
       if b.id == "exit" then return "exit" end
       if b.action then b.action() end
+      drawButton(b)
+      return
     end
   end
 end
@@ -822,47 +863,49 @@ end
 local function drawStatic()
   gpu.setBackground(C.bg)
   gpu.fill(1, 1, W, H, " ")
-  put(1, 1, "  METEOR RITUAL CONTROLLER", C.text, C.title, W)
+  put(1, 1, "", C.text, C.title, W)
   gpu.setBackground(C.divider)
-  gpu.fill(39, 2, 1, H - 1, " ")
-  header(2, Y(3), 36, "ADD METEOR TO QUEUE", "purple = quarry")
+  gpu.fill(40, 2, 1, 9, " ")
+  gpu.fill(40, 16, 1, H - 3 - 16 + 1, " ")
+  header(41, 5, 39, "STATUS")
+  header(1, 11, W, "METEORS  touch to add to queue", "purple = quarry")
+  header(41, 16, 39, "EVENT LOG")
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
 end
 
 local function drawTitle()
+  put(2, 1, nowText(), C.text, C.title, 5)
+  put(8, 1, "Meteor Ritual", C.headerText, C.title, 14)
+  drawBar(23, 1, 12, 1, progress or 0, C.progress)
+  put(37, 1, STATE_LABEL[state] or state, STATE_TEXT[state] or C.text, C.title, 31)
   local label, color = " STOPPED ", C.bad
   if running then label, color = " RUNNING ", C.good end
-  put(W - #label - 1, 1, label, C.text, color)
+  put(W - #label, 1, label, C.text, color)
 end
 
--- miners: two columns of 8 (M01-M08 left, M09-M16 right), one status chip each
+-- miners: two columns of 8 (M01-M08 left, M09-M16 right)
 local function drawMiners()
   local activeCount = 0
-  local chipH = (VS > 1) and (VS - 1) or 1
   for i, m in ipairs(MINERS) do
     local col = math.floor((i - 1) / 8)
     local row = (i - 1) % 8
-    local x, y = PANEL_X + col * 20, Y(4 + row)
+    local x, y = 2 + col * 20, 3 + row
     local label, color
     if m.active == nil then
-      label, color = "N/A", C.off
+      label, color = "N/A", 0x777777
     elseif m.active then
-      label, color = "Operating", C.good
+      label, color = "Operating", 0x55FF55
       activeCount = activeCount + 1
     elseif m.disabled then
-      label, color = "DISABLED", C.warn
+      label, color = "DISABLED", 0xFFAA33
     else
-      label, color = "OFF", C.bad
+      label, color = "OFF", 0xFF5555
     end
-    local ty = y + math.floor((chipH - 1) / 2)
-    gpu.setBackground(color)
-    gpu.fill(x + 5, y, 11, chipH, " ")
-    local pad = math.floor((11 - #label) / 2)
-    put(x + 5, ty, string.rep(" ", pad) .. label, C.text, color, 11)
-    put(x + 1, ty, m.name, C.dim, C.bg, 4)
+    put(x, y, m.name, m.active and C.text or 0xAAAAAA, C.bg, 4)
+    put(x + 4, y, label, color, C.bg, 13)
   end
-  header(PANEL_X, Y(3), 40, "GT MINERS", activeCount .. "/" .. #MINERS .. " operating",
+  header(1, 2, 39, "GT MINERS", activeCount .. "/" .. #MINERS .. " operating",
     activeCount > 0 and 0x66FF66 or C.dim)
 end
 
@@ -870,51 +913,48 @@ local function drawFluid()
   local text
   if fluid then text = fmt(fluid) .. " mB" else text = "N/A [" .. (fluidNote or "?") .. "]" end
   local enough = fluid and fluid >= FLUID_START_MIN
-  header(PANEL_X, Y(13), 40, "DRILLING FLUID", text,
+  header(41, 2, 39, "DRILLING FLUID", text,
     fluid and (enough and 0x66FF66 or 0xFF7777) or 0xFFCC00)
-  local barW = 40
+  put(41, 3, " Start at " .. fmt(FLUID_START_MIN) .. " mB, idle check " .. fmt(FLUID_RUN_MIN), C.dim, C.bg, 39)
   local color = enough and C.good or C.bad
-  local fill = drawBar(PANEL_X, Y(14), barW, VS, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
+  local fill = drawBar(41, 4, 39, 1, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
   -- tick mark = minimum needed to summon a meteor
-  local mark = math.min(barW - 1, math.floor(FLUID_START_MIN / FLUID_BAR_MAX * barW))
+  local mark = math.min(38, math.floor(FLUID_START_MIN / FLUID_BAR_MAX * 39))
   gpu.setForeground(C.text)
   gpu.setBackground(mark < fill and color or C.track)
-  for r = 0, VS - 1 do gpu.set(PANEL_X + mark, Y(14) + r, "|") end
+  gpu.set(41 + mark, 4, "|")
 end
 
 local function drawStatus()
-  local stateColor = STATE_COLOR[state] or C.off
-  put(PANEL_X, Y(16), " " .. (STATE_LABEL[state] or state), C.text, stateColor, 40)
-
   local bad = false
   local low = status:lower()
-  for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid"}) do
+  for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid", "not in interface", "no me pattern", "canceled", "rejected"}) do
     if low:find(w, 1, true) then bad = true end
   end
-  put(PANEL_X, Y(17), " " .. status, bad and 0xFFAA33 or 0xFFFF88, C.bg, 40)
-
+  put(41, 6, " " .. status, bad and 0xFFAA33 or 0xFFFF88, C.bg, 39)
   local current = (queue[1] and queue[1].loc == "fired") and METEORS[queue[1].m].label or "-"
-  put(PANEL_X, Y(18), " Current meteor: ", C.dim, C.bg, 17)
-  put(PANEL_X + 17, Y(18), current, C.text, C.bg, 23)
-
-  drawBar(PANEL_X, Y(19), 40, 1, progress or 0, C.progress)
+  put(41, 7, " Meteor: ", C.dim, C.bg, 9)
+  put(50, 7, current, C.text, C.bg, 30)
+  put(41, 8, " Ritual: " .. (ritualStarted and "started" or "not started yet"), C.dim, C.bg, 39)
+  drawBar(41, 9, 33, 1, progress or 0, C.progress)
+  put(75, 9, progress and string.format(" %3d%%", math.floor(progress * 100)) or "   - ", C.dim, C.bg, 5)
+  put(41, 10, " In this step: " .. math.floor(computer.uptime() - stateSince) .. " s", C.dim, C.bg, 39)
 end
 
-local QUEUE_ROWS = 11
-
 local function drawQueue()
-  header(2, Y(13), 36, "QUEUE", #queue .. " queued")
-  for r = 1, QUEUE_ROWS do
+  header(1, 16, 39, "QUEUE", #queue .. " queued")
+  for r = 1, LIST_ROWS do
     local line, fg, bg, tag, tagColor = "", C.text, C.bg, nil, C.dim
     local e = queue[r]
-    if r == QUEUE_ROWS and #queue > QUEUE_ROWS then
-      line, fg = " ... +" .. (#queue - QUEUE_ROWS + 1) .. " more", C.dim
+    if r == LIST_ROWS and #queue > LIST_ROWS then
+      line, fg = "  ... +" .. (#queue - LIST_ROWS + 1) .. " more", C.dim
     elseif e then
       local mt = METEORS[e.m]
-      line = string.format(" %2d. %s", r, mt.label)
+      local active = e.loc == "fired"
+      line = string.format("%s%2d. %s", active and "> " or "  ", r, mt.label)
       if mt.quarry then fg = 0xD0A8FF end
-      if e.loc == "fired" then
-        tag, tagColor, bg = "ACTIVE", 0x66E0FF, C.hilite
+      if active then
+        tag, tagColor, bg, fg = "ACTIVE", 0x66E0FF, C.hilite, 0x66E0FF
       elseif e.loc == "dropper" then
         tag = "in dropper"
       elseif e.loc == "crafting" then
@@ -923,11 +963,35 @@ local function drawQueue()
         tag = "waiting"
       end
     elseif r == 1 then
-      line, fg = " (queue is empty)", C.dim
+      line, fg = "  (queue is empty)", C.dim
     end
-    put(2, Y(13 + r), line, fg, bg, 36)
-    if tag then put(2 + 36 - #tag - 1, Y(13 + r), tag, tagColor, bg) end
+    put(1, LIST_TOP + r - 1, line, fg, bg, 39)
+    if tag then put(1 + 39 - #tag - 1, LIST_TOP + r - 1, tag, tagColor, bg) end
   end
+end
+
+local function drawLog()
+  for r = 1, LIST_ROWS do
+    local e = events[r]
+    local y = LIST_TOP + r - 1
+    if e then
+      put(41, y, " " .. e.t .. " ", C.dim, C.bg, 7)
+      put(48, y, e.text, e.color, C.bg, 32)
+    else
+      put(41, y, "", C.dim, C.bg, 39)
+    end
+  end
+end
+
+-- Last touch action: bright for a few seconds after the touch, then dim.
+local function drawLastAction()
+  local text, fg, bg = " Touch a button", C.dim, 0x1A1A1A
+  if lastAction then
+    local fresh = computer.uptime() - lastAction.at < 4
+    text = " > " .. lastAction.text
+    fg, bg = fresh and 0xFFFFFF or C.dim, fresh and C.accent or 0x1A1A1A
+  end
+  put(1, H, text, fg, bg, W)
 end
 
 local function drawDynamic()
@@ -936,6 +1000,8 @@ local function drawDynamic()
   drawFluid()
   drawStatus()
   drawQueue()
+  drawLog()
+  drawLastAction()
   -- START / STOP changes color and label, redraw only when it flips
   if drawnRunning ~= running then
     drawButton(startBtn)
@@ -953,7 +1019,10 @@ local function main()
   drawStatic()
   while true do
     local ev, _, x, y = event.pull(1, "touch")
-    if ev and handleTouch(x, y) == "exit" then return end
+    if ev then
+      if handleTouch(x, y) == "exit" then return end
+      drawDynamic()               -- show the result of the touch right away
+    end
     pollHardware(computer.uptime())
     if running then step() end
     updateCrafts(computer.uptime())
