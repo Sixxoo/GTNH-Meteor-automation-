@@ -177,6 +177,7 @@ local fluid = nil             -- Drilling Fluid in ME (mB), nil = unknown
 local fluidNote = nil         -- short reason shown when fluid is unknown
 local nextFluidPoll = 0
 local minersOk = false        -- every miner answered the last poll
+local progress = nil          -- 0..1 progress of a timed step (nil = none)
 
 local STATE_LABEL = {
   idle       = "Waiting for next meteor",
@@ -190,6 +191,7 @@ local STATE_LABEL = {
 local function setState(newState, message)
   state = newState
   stateSince = computer.uptime()
+  progress = nil
   if message then status = message end
 end
 
@@ -337,6 +339,7 @@ local function stepRitual(now)
   local left = RITUAL_WARMUP - elapsed(now)
   if left > 0 then
     status = "Ritual starting (" .. math.ceil(left) .. " s)"
+    progress = 1 - left / RITUAL_WARMUP
     return
   end
   if now < retryAt then return end
@@ -362,6 +365,7 @@ local function stepWaitStart(now)
 end
 
 local function stepMining(now)
+  progress = nil
   if not minersOk then
     idleSince = nil
     status = "Miner unreachable (address/adapter)"
@@ -387,6 +391,7 @@ local function stepMining(now)
   local left = IDLE_CONFIRM - (now - idleSince)
   if left > 0 then
     status = "Miners OFF, verifying (" .. math.ceil(left) .. " s)"
+    progress = 1 - left / IDLE_CONFIRM
     return
   end
 
@@ -403,6 +408,7 @@ local function stepQuarry(now)
   local left = QUARRY_TIME - elapsed(now)
   if left > 0 then
     status = "Ender Quarry running (" .. math.ceil(left) .. " s)"
+    progress = 1 - left / QUARRY_TIME
     return
   end
   stopQuarry()
@@ -478,6 +484,19 @@ local function fmt(n)
   return (r:gsub("^ ", ""))
 end
 
+-- ---------- colors ----------
+local C = {
+  bg = 0x000000, title = 0x12304D, header = 0x262626, headerText = 0x7FD1FF,
+  text = 0xFFFFFF, dim = 0x9A9A9A, track = 0x303030, divider = 0x1E1E1E,
+  good = 0x2E9E3E, bad = 0xB02A2A, warn = 0xB87400, off = 0x4A4A4A,
+  accent = 0x1565C0, quarry = 0x6A3FA0, hilite = 0x0B3C55, progress = 0x2196F3,
+}
+
+local STATE_COLOR = {
+  idle = 0x4A4A4A, ritual = 0x7B3FA0, wait_start = 0xB87400,
+  mining = 0x1565C0, quarry = 0x6A3FA0, finish = 0x2E9E3E,
+}
+
 -- ---------- buttons ----------
 local buttons = {}
 
@@ -490,8 +509,9 @@ local function drawButton(b)
   gpu.setBackground(b.color and b.color() or 0x444444)
   gpu.setForeground(0xFFFFFF)
   gpu.fill(b.x, b.y, b.w, b.h, " ")
-  local len = unicode.len(b.label)
-  gpu.set(b.x + math.floor((b.w - len) / 2), b.y + math.floor(b.h / 2), b.label)
+  local label = type(b.label) == "function" and b.label() or b.label
+  local len = unicode.len(label)
+  gpu.set(b.x + math.floor((b.w - len) / 2), b.y + math.floor(b.h / 2), label)
 end
 
 local function queueAdd(meteorIdx)
@@ -502,22 +522,23 @@ assert(#METEORS <= 4, "Screen layout has room for max. 4 meteors")
 
 for i, m in ipairs(METEORS) do
   addButton({
-    x = 2, y = Y(4 + (i - 1) * 3), w = 34, h = 3 * VS,
-    label = "+ " .. m.label .. (m.quarry and " [quarry]" or ""),
-    color = function() return 0x0066CC end,
+    x = 2, y = Y(4 + (i - 1) * 3), w = 36, h = 2 * VS,
+    label = "+ " .. m.label .. (m.quarry and "  [quarry]" or ""),
+    color = function() return m.quarry and C.quarry or C.accent end,
     action = function() queueAdd(i) end,
   })
 end
 
 local startBtn = addButton({
-  x = PANEL_X, y = Y(20), w = 18, h = 2 * VS, label = "START / STOP",
-  color = function() return running and 0x00AA00 or 0xAA0000 end,
+  x = PANEL_X, y = Y(20), w = 19, h = 2 * VS,
+  label = function() return running and "STOP" or "START" end,
+  color = function() return running and C.bad or C.good end,
   action = function() running = not running end,
 })
 
 addButton({
-  x = PANEL_X + 20, y = Y(20), w = 18, h = 2 * VS, label = "CLEAR QUEUE",
-  color = function() return 0x886600 end,
+  x = PANEL_X + 21, y = Y(20), w = 19, h = 2 * VS, label = "CLEAR QUEUE",
+  color = function() return 0x9E6B00 end,
   action = function()
     -- the meteor currently being processed (first in queue) is kept
     local keep = (state ~= "idle") and queue[1] or nil
@@ -527,8 +548,8 @@ addButton({
 })
 
 addButton({
-  x = PANEL_X, y = Y(23), w = 18, h = 2 * VS, label = "EXIT",
-  color = function() return 0x777777 end,
+  x = PANEL_X, y = Y(23), w = 19, h = 2 * VS, label = "EXIT",
+  color = function() return 0x555555 end,
   id = "exit",
 })
 
@@ -542,91 +563,138 @@ local function handleTouch(x, y)
   end
 end
 
--- ---------- drawing ----------
+-- ---------- drawing helpers ----------
 local drawnRunning = nil
 
+-- Section strip with optional right-aligned text.
+local function header(x, y, w, text, right, rightColor)
+  put(x, y, " " .. text, C.headerText, C.header, w)
+  if right then
+    local s = right .. " "
+    put(x + w - unicode.len(s), y, s, rightColor or C.dim, C.header)
+  end
+end
+
+-- Horizontal bar; returns the number of filled columns.
+local function drawBar(x, y, w, h, frac, color)
+  local fill = math.max(0, math.min(w, math.floor((frac or 0) * w + 0.5)))
+  gpu.setBackground(C.track)
+  gpu.fill(x, y, w, h, " ")
+  if fill > 0 then
+    gpu.setBackground(color)
+    gpu.fill(x, y, fill, h, " ")
+  end
+  return fill
+end
+
 local function drawStatic()
-  gpu.setBackground(0x000000)
+  gpu.setBackground(C.bg)
   gpu.fill(1, 1, W, H, " ")
-  put(2, 1, "METEOR RITUAL CONTROLLER", 0x00FFFF)
-  put(2, Y(3), "ADD METEOR TO QUEUE", 0xAAAAAA)
-  put(2, Y(17), "QUEUE (summoning order)", 0xAAAAAA)
+  put(1, 1, "  METEOR RITUAL CONTROLLER", C.text, C.title, W)
+  gpu.setBackground(C.divider)
+  gpu.fill(39, 2, 1, H - 1, " ")
+  header(2, Y(3), 36, "ADD METEOR TO QUEUE")
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
 end
 
--- miners: two columns of 8 (M01-M08 left, M09-M16 right)
+local function drawTitle()
+  local label, color = " STOPPED ", C.bad
+  if running then label, color = " RUNNING ", C.good end
+  put(W - #label - 1, 1, label, C.text, color)
+end
+
+-- miners: two columns of 8 (M01-M08 left, M09-M16 right), one status chip each
 local function drawMiners()
   local activeCount = 0
+  local chipH = (VS > 1) and (VS - 1) or 1
   for i, m in ipairs(MINERS) do
     local col = math.floor((i - 1) / 8)
     local row = (i - 1) % 8
     local x, y = PANEL_X + col * 20, Y(4 + row)
     local label, color
     if m.active == nil then
-      label, color = "N/A", 0x888888
+      label, color = "N/A", C.off
     elseif m.active then
-      label, color = "Operating", 0x00FF00
+      label, color = "Operating", C.good
       activeCount = activeCount + 1
     elseif m.disabled then
-      label, color = "DISABLED", 0xFFAA00
+      label, color = "DISABLED", C.warn
     else
-      label, color = "OFF", 0xFF4444
+      label, color = "OFF", C.bad
     end
-    put(x, y, m.name, 0xFFFFFF, 0x000000, 4)
-    put(x + 4, y, label, color, 0x000000, 15)
+    local ty = y + math.floor((chipH - 1) / 2)
+    gpu.setBackground(color)
+    gpu.fill(x + 5, y, 11, chipH, " ")
+    local pad = math.floor((11 - #label) / 2)
+    put(x + 5, ty, string.rep(" ", pad) .. label, C.text, color, 11)
+    put(x + 1, ty, m.name, C.dim, C.bg, 4)
   end
-  put(PANEL_X, Y(3), "GT MINERS (" .. activeCount .. "/" .. #MINERS .. " operating)", 0xAAAAAA, 0x000000, 40)
+  header(PANEL_X, Y(3), 40, "GT MINERS", activeCount .. "/" .. #MINERS .. " operating",
+    activeCount > 0 and 0x66FF66 or C.dim)
 end
 
 local function drawFluid()
   local text
-  if fluid then
-    text = fmt(fluid) .. " mB"
-  else
-    text = "N/A [" .. (fluidNote or "?") .. "]"
-  end
-  put(PANEL_X, Y(13), "Drilling Fluid: " .. text, 0xFFFF00, 0x000000, 40)
-  local barW = 36
-  local fill = 0
-  if fluid then fill = math.min(barW, math.floor(fluid / FLUID_BAR_MAX * barW)) end
-  gpu.setBackground(0x333333)
-  gpu.fill(PANEL_X, Y(14), barW, VS, " ")
-  if fill > 0 then
-    gpu.setBackground((fluid >= FLUID_START_MIN) and 0x00AA00 or 0xCC0000)
-    gpu.fill(PANEL_X, Y(14), fill, VS, " ")
-  end
+  if fluid then text = fmt(fluid) .. " mB" else text = "N/A [" .. (fluidNote or "?") .. "]" end
+  local enough = fluid and fluid >= FLUID_START_MIN
+  header(PANEL_X, Y(13), 40, "DRILLING FLUID", text,
+    fluid and (enough and 0x66FF66 or 0xFF7777) or 0xFFCC00)
+  local barW = 40
+  local color = enough and C.good or C.bad
+  local fill = drawBar(PANEL_X, Y(14), barW, VS, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
+  -- tick mark = minimum needed to summon a meteor
+  local mark = math.min(barW - 1, math.floor(FLUID_START_MIN / FLUID_BAR_MAX * barW))
+  gpu.setForeground(C.text)
+  gpu.setBackground(mark < fill and color or C.track)
+  for r = 0, VS - 1 do gpu.set(PANEL_X + mark, Y(14) + r, "|") end
 end
 
 local function drawStatus()
-  put(PANEL_X, Y(16), "State: " .. (STATE_LABEL[state] or state), 0xFFFFFF, 0x000000, 40)
-  put(PANEL_X, Y(17), status, 0xFFFF00, 0x000000, 40)
+  local stateColor = STATE_COLOR[state] or C.off
+  put(PANEL_X, Y(16), " " .. (STATE_LABEL[state] or state), C.text, stateColor, 40)
+
+  local bad = false
+  local low = status:lower()
+  for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid"}) do
+    if low:find(w, 1, true) then bad = true end
+  end
+  put(PANEL_X, Y(17), " " .. status, bad and 0xFFAA33 or 0xFFFF88, C.bg, 40)
+
   local current = (state ~= "idle" and queue[1]) and METEORS[queue[1]].label or "-"
-  put(PANEL_X, Y(18), "Current meteor: " .. current, 0xFFFFFF, 0x000000, 40)
+  put(PANEL_X, Y(18), " Current meteor: ", C.dim, C.bg, 17)
+  put(PANEL_X + 17, Y(18), current, C.text, C.bg, 23)
+
+  drawBar(PANEL_X, Y(19), 40, 1, progress or 0, C.progress)
 end
 
 local function drawQueue()
+  header(2, Y(17), 36, "QUEUE", #queue .. " queued")
   for r = 1, 7 do
-    local line, color = "", 0xFFFFFF
+    local line, fg, bg = "", C.text, C.bg
     if r == 7 and #queue > 7 then
-      line = "... +" .. (#queue - 6) .. " more"
+      line, fg = " ... +" .. (#queue - 6) .. " more", C.dim
     elseif queue[r] then
-      line = r .. ". " .. METEORS[queue[r]].label
+      local mt = METEORS[queue[r]]
+      line = string.format(" %d. %s%s", r, mt.label, mt.quarry and "  [quarry]" or "")
       if r == 1 and state ~= "idle" then
-        line = "> " .. line .. " (active)"
-        color = 0x00FFFF
+        line = line .. "  << ACTIVE"
+        fg, bg = 0x66E0FF, C.hilite
       end
+    elseif r == 1 then
+      line, fg = " (queue is empty)", C.dim
     end
-    put(2, Y(17 + r), line, color, 0x000000, 36)
+    put(2, Y(17 + r), line, fg, bg, 36)
   end
 end
 
 local function drawDynamic()
+  drawTitle()
   drawMiners()
   drawFluid()
   drawStatus()
   drawQueue()
-  -- START / STOP changes color, redraw only when it flips
+  -- START / STOP changes color and label, redraw only when it flips
   if drawnRunning ~= running then
     drawButton(startBtn)
     drawnRunning = running
