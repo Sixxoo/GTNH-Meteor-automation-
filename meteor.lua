@@ -66,12 +66,13 @@ local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 
 -- ---- Meteors (max 16 with this screen layout) ----
 -- label:    text on the button (max 15 characters)
--- catalyst: item name of the catalyst
+-- catalyst: the catalyst, either the internal name ("modid:item") or the name shown
+--           in the game ("Exquisite Diamond"); a text with ':' is taken as internal name
 -- damage:   optional item damage / metadata (only used to find the ME crafting pattern)
 --           (check with tp.getStackInSlot(sides.up, slot).name)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 local METEORS = {
-  {label = "Meteor 1", catalyst = "minecraft:iron_block",    quarry = false},
+  {label = "Meteor 1", catalyst = "Exquisite Diamond",        quarry = false},
   {label = "Meteor 2", catalyst = "minecraft:gold_block",    quarry = true},
   {label = "Meteor 3", catalyst = "minecraft:diamond_block", quarry = true},
 }
@@ -290,7 +291,7 @@ local function findStack(side, itemName)
   if not size then return nil end
   for slot = 1, size do
     local stack = tp.getStackInSlot(side, slot)
-    if stack and stack.name == itemName then return slot end
+    if stack and (stack.name == itemName or stack.label == itemName) then return slot end
   end
   return nil
 end
@@ -310,7 +311,7 @@ local function countItem(side, itemName)
   local total = 0
   for slot = 1, size do
     local stack = tp.getStackInSlot(side, slot)
-    if stack and stack.name == itemName then total = total + (stack.size or 1) end
+    if stack and (stack.name == itemName or stack.label == itemName) then total = total + (stack.size or 1) end
   end
   return total
 end
@@ -352,12 +353,19 @@ end
 -- dropper (max 1); when it has been fired the following one is moved in.
 -- "crafting": the catalyst is being made by the ME system and has not reached the chest yet.
 
+-- ME search filter for a meteor's catalyst (internal name or displayed name).
+local function itemFilter(mt)
+  local f = {}
+  if mt.catalyst:find(":", 1, true) then f.name = mt.catalyst else f.label = mt.catalyst end
+  if mt.damage then f.damage = mt.damage end
+  return f
+end
+
 -- Sends the crafting request for a queue entry to the ME system.
 local function requestCraft(entry)
   local mt = METEORS[entry.m]
   if not me or not me.getCraftables then return false, "ME can't craft" end
-  local filter = {name = mt.catalyst}
-  if mt.damage then filter.damage = mt.damage end
+  local filter = itemFilter(mt)
   local list = me.getCraftables(filter)
   local craftable = list and list[1]
   if not craftable then return false, "No ME pattern: " .. mt.label end
@@ -370,8 +378,7 @@ end
 -- How many of an item the whole ME network holds (0 if it cannot be read).
 local function countNetwork(mt)
   if not me or not me.getItemsInNetwork then return 0 end
-  local filter = {name = mt.catalyst}
-  if mt.damage then filter.damage = mt.damage end
+  local filter = itemFilter(mt)
   local ok, list = pcall(me.getItemsInNetwork, filter)
   if not ok or type(list) ~= "table" then return 0 end
   local total = 0
