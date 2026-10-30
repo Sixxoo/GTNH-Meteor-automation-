@@ -86,6 +86,11 @@ local RITUAL_PULSE       = 1.0    -- length of the pulse
 local RITUAL_WARMUP      = 5      -- seconds to wait after the pulse before the catalyst drop
 local RITUAL_EACH_METEOR = false  -- true: send the pulse before every meteor instead of once
 
+-- ---- Screen resolution ----
+-- nil: fit the screen's shape automatically (uses extra rows for spacing).
+-- Or set it by hand, e.g. {80, 50}. The layout is designed for 80 columns.
+local RESOLUTION = nil
+
 -- ---- Ender Quarry signal ----
 -- "pulse": one short pulse starts it, then we just wait QUARRY_TIME
 -- "hold":  signal stays on for QUARRY_TIME, then goes off
@@ -404,8 +409,33 @@ end
 -- USER INTERFACE
 -- =====================================================================
 
-local W, H = 80, 25
 local PANEL_X = 40            -- left panel: x 2..37, right panel: x 40..79
+
+-- The layout is designed for 80x25. On a taller screen the extra rows are used
+-- for spacing: every layout row n is placed at screen row Y(n).
+local function fitResolution()
+  local maxW, maxH = gpu.maxResolution()
+  if RESOLUTION then
+    return math.min(RESOLUTION[1], maxW), math.min(RESOLUTION[2], maxH)
+  end
+  local w, h = math.min(80, maxW), 25
+  local ok, a, b = pcall(function()
+    return component.proxy(gpu.getScreen()).getAspectRatio()
+  end)
+  if ok and a and b and a > 0 then
+    -- a character cell is twice as tall as wide, so w/h = 2*a/b fills the screen
+    local ideal = math.floor(w * b / (2 * a) + 0.5)
+    h = math.max(25, math.min(ideal, maxH))
+  end
+  return w, h
+end
+
+local W, H = fitResolution()
+local VS = math.max(1, math.floor(H / 25))     -- vertical scale of the layout
+
+local function Y(n)
+  return (n - 1) * VS + 1
+end
 
 local function put(x, y, text, fg, bg, width)
   text = tostring(text)
@@ -449,7 +479,7 @@ assert(#METEORS <= 4, "Screen layout has room for max. 4 meteors")
 
 for i, m in ipairs(METEORS) do
   addButton({
-    x = 2, y = 4 + (i - 1) * 3, w = 34, h = 3,
+    x = 2, y = Y(4 + (i - 1) * 3), w = 34, h = 3 * VS,
     label = "+ " .. m.label .. (m.quarry and " [quarry]" or ""),
     color = function() return 0x0066CC end,
     action = function() queueAdd(i) end,
@@ -457,13 +487,13 @@ for i, m in ipairs(METEORS) do
 end
 
 local startBtn = addButton({
-  x = PANEL_X, y = 20, w = 18, h = 2, label = "START / STOP",
+  x = PANEL_X, y = Y(20), w = 18, h = 2 * VS, label = "START / STOP",
   color = function() return running and 0x00AA00 or 0xAA0000 end,
   action = function() running = not running end,
 })
 
 addButton({
-  x = PANEL_X + 20, y = 20, w = 18, h = 2, label = "CLEAR QUEUE",
+  x = PANEL_X + 20, y = Y(20), w = 18, h = 2 * VS, label = "CLEAR QUEUE",
   color = function() return 0x886600 end,
   action = function()
     -- the meteor currently being processed (first in queue) is kept
@@ -474,7 +504,7 @@ addButton({
 })
 
 addButton({
-  x = PANEL_X, y = 23, w = 18, h = 2, label = "EXIT",
+  x = PANEL_X, y = Y(23), w = 18, h = 2 * VS, label = "EXIT",
   color = function() return 0x777777 end,
   id = "exit",
 })
@@ -496,8 +526,8 @@ local function drawStatic()
   gpu.setBackground(0x000000)
   gpu.fill(1, 1, W, H, " ")
   put(2, 1, "METEOR RITUAL CONTROLLER", 0x00FFFF)
-  put(2, 3, "ADD METEOR TO QUEUE", 0xAAAAAA)
-  put(2, 17, "QUEUE (summoning order)", 0xAAAAAA)
+  put(2, Y(3), "ADD METEOR TO QUEUE", 0xAAAAAA)
+  put(2, Y(17), "QUEUE (summoning order)", 0xAAAAAA)
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
 end
@@ -508,7 +538,7 @@ local function drawMiners()
   for i, m in ipairs(MINERS) do
     local col = math.floor((i - 1) / 8)
     local row = (i - 1) % 8
-    local x, y = PANEL_X + col * 20, 4 + row
+    local x, y = PANEL_X + col * 20, Y(4 + row)
     local label, color
     if m.active == nil then
       label, color = "N/A", 0x888888
@@ -523,28 +553,28 @@ local function drawMiners()
     put(x, y, m.name, 0xFFFFFF, 0x000000, 4)
     put(x + 4, y, label, color, 0x000000, 15)
   end
-  put(PANEL_X, 3, "GT MINERS (" .. activeCount .. "/" .. #MINERS .. " operating)", 0xAAAAAA, 0x000000, 40)
+  put(PANEL_X, Y(3), "GT MINERS (" .. activeCount .. "/" .. #MINERS .. " operating)", 0xAAAAAA, 0x000000, 40)
 end
 
 local function drawFluid()
   local text = fluid and (fmt(fluid) .. " mB") or "N/A"
-  put(PANEL_X, 13, "Drilling Fluid: " .. text, 0xFFFF00, 0x000000, 40)
+  put(PANEL_X, Y(13), "Drilling Fluid: " .. text, 0xFFFF00, 0x000000, 40)
   local barW = 36
   local fill = 0
   if fluid then fill = math.min(barW, math.floor(fluid / FLUID_BAR_MAX * barW)) end
   gpu.setBackground(0x333333)
-  gpu.fill(PANEL_X, 14, barW, 1, " ")
+  gpu.fill(PANEL_X, Y(14), barW, VS, " ")
   if fill > 0 then
     gpu.setBackground((fluid >= FLUID_START_MIN) and 0x00AA00 or 0xCC0000)
-    gpu.fill(PANEL_X, 14, fill, 1, " ")
+    gpu.fill(PANEL_X, Y(14), fill, VS, " ")
   end
 end
 
 local function drawStatus()
-  put(PANEL_X, 16, "State: " .. (STATE_LABEL[state] or state), 0xFFFFFF, 0x000000, 40)
-  put(PANEL_X, 17, status, 0xFFFF00, 0x000000, 40)
+  put(PANEL_X, Y(16), "State: " .. (STATE_LABEL[state] or state), 0xFFFFFF, 0x000000, 40)
+  put(PANEL_X, Y(17), status, 0xFFFF00, 0x000000, 40)
   local current = (state ~= "idle" and queue[1]) and METEORS[queue[1]].label or "-"
-  put(PANEL_X, 18, "Current meteor: " .. current, 0xFFFFFF, 0x000000, 40)
+  put(PANEL_X, Y(18), "Current meteor: " .. current, 0xFFFFFF, 0x000000, 40)
 end
 
 local function drawQueue()
@@ -559,7 +589,7 @@ local function drawQueue()
         color = 0x00FFFF
       end
     end
-    put(2, 17 + r, line, color, 0x000000, 36)
+    put(2, Y(17 + r), line, color, 0x000000, 36)
   end
 end
 
