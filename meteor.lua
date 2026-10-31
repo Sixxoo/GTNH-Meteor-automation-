@@ -24,6 +24,42 @@ local unicode   = require("unicode")
 local gpu = component.gpu
 local tp  = component.transposer
 
+-- ---------------------------------------------------------------------
+-- Your own settings live in a separate file, so updating this program never
+-- overwrites them. Put meteor_config.lua next to the program (e.g. /home/meteor_config.lua).
+-- It must return a table with the settings below, for example:
+--     local sides = require("sides")
+--     return {QUARRY_TIME = 90, METEORS = {...}}
+-- Anything not set there uses the defaults in this file.
+-- ---------------------------------------------------------------------
+local USER = {}
+local CONFIG_NOTE = "No meteor_config.lua found - using built-in defaults"
+do
+  local paths = {"/home/meteor_config.lua"}
+  local okShell, shell = pcall(require, "shell")
+  if okShell and shell and shell.resolve then
+    local okR, p = pcall(shell.resolve, "meteor_config.lua")
+    if okR and p then paths[#paths + 1] = p end
+  end
+  local fs = require("filesystem")
+  for _, path in ipairs(paths) do
+    if fs.exists(path) then
+      local ok, result = pcall(dofile, path)
+      if not ok then error("Error in " .. path .. ": " .. tostring(result), 0) end
+      if type(result) ~= "table" then error(path .. " must end with: return { ... }", 0) end
+      USER = result
+      CONFIG_NOTE = "Settings loaded from " .. path
+      break
+    end
+  end
+end
+
+local function cfg(name, default)
+  local v = USER[name]
+  if v == nil then return default end
+  return v
+end
+
 -- =====================================================================
 -- CONFIG
 -- =====================================================================
@@ -31,38 +67,38 @@ local tp  = component.transposer
 -- ---- Catalyst chest and dropper (transposer sides) ----
 -- ME Interfaces with the catalysts, one entry per transposer side that has one.
 -- Add more sides when you attach more Interfaces (never the dropper's side).
-local SOURCE_SIDES = {sides.up}
-local DROPPER_SIDE = sides.down     -- dropper (below the transposer, holds max 1 catalyst)
+local SOURCE_SIDES = cfg("SOURCE_SIDES", {sides.up})
+local DROPPER_SIDE = cfg("DROPPER_SIDE", sides.down)     -- dropper (below the transposer, holds max 1 catalyst)
 
 -- ---- Redstone outputs ----
 -- side: side of the redstone component the signal comes out of.
 -- addr: optional address prefix of a specific Redstone I/O or card.
 --       Leave it out to use the computer's default redstone component.
-local OUT = {
+local OUT = cfg("OUT", {
   dropper = {side = sides.up},      -- fires the dropper
   ritual  = {side = sides.east},    -- one-time start pulse for the ritual (Dynamism Tablet)
   miners  = {side = sides.south},   -- one-time start pulse for the GT miners
   quarry  = {side = sides.north},   -- starts the Ender Quarry
-}
+})
 
 -- ---- Component addresses (the first few characters are enough) ----
 -- List them with:  components
-local ME_ADDR = "00bd"              -- me_controller or me_interface
+local ME_ADDR = cfg("ME_ADDR", "00bd")              -- me_controller or me_interface
 
 -- One entry per GT miner controller (max 16, shown as M01..M16).
 -- Delete the lines of miners you do not have.
-local MINER_ADDRS = {
+local MINER_ADDRS = cfg("MINER_ADDRS", {
   "68e3", "2db5", "7684", "6227",   -- M01-M04
   "d7b2", "64ff", "2ab2", "7885",   -- M05-M08
   "43e2", "7568", "9d1d", "72da",   -- M09-M12
   "cc18", "132b", "d16b", "5e9c",   -- M13-M16
-}
+})
 
 -- ---- Drilling Fluid in the ME system ----
-local FLUID_MATCH     = "Drilling Fluid"  -- searched in fluid label/name (case, spaces, _ ignored)
-local FLUID_START_MIN = 20000       -- mB needed to summon a new meteor
-local FLUID_RUN_MIN   = 1000        -- mB below which idle miners are not trusted
-local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
+local FLUID_MATCH = cfg("FLUID_MATCH", "Drilling Fluid")  -- searched in fluid label/name (case, spaces, _ ignored)
+local FLUID_START_MIN = cfg("FLUID_START_MIN", 20000)       -- mB needed to summon a new meteor
+local FLUID_RUN_MIN = cfg("FLUID_RUN_MIN", 1000)        -- mB below which idle miners are not trusted
+local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000)      -- mB shown as a full bar
 
 -- ---- Meteors (max 16 with this screen layout) ----
 -- label:    text on the button (max 17 characters)
@@ -72,11 +108,11 @@ local FLUID_BAR_MAX   = 100000      -- mB shown as a full bar
 --           (check with tp.getStackInSlot(sides.up, slot).name)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 -- A meteor whose label is still "Meteor N" or "Slot N" counts as not set up and cannot be queued.
-local METEORS = {
+local METEORS = cfg("METEORS", {
   {label = "Exquisite Diamond", catalyst = "Exquisite Diamond", quarry = false},
   {label = "Slot 2",   catalyst = "minecraft:gold_block",    quarry = true},
   {label = "Slot 3",   catalyst = "minecraft:diamond_block", quarry = true},
-}
+})
 
 -- ---- Crafting the catalysts in the ME system ----
 -- The catalysts are taken by the transposer from the ME Interface above it (the
@@ -84,42 +120,42 @@ local METEORS = {
 -- When the ME network does not hold the catalyst of a clicked meteor, a crafting request
 -- (1 piece) is sent to the ME system. The meteor waits in the queue ("crafting") until
 -- the craft is done and the item shows up in the Interface.
-local CRAFT_MISSING = true      -- false: a missing catalyst is simply refused
-local CRAFT_RETRY   = 10        -- seconds before a failed or canceled craft is requested again
+local CRAFT_MISSING = cfg("CRAFT_MISSING", true)      -- false: a missing catalyst is simply refused
+local CRAFT_RETRY = cfg("CRAFT_RETRY", 10)        -- seconds before a failed or canceled craft is requested again
 
 -- ---- Timing (seconds) ----
-local START_DELAY   = 5     -- after the catalyst drop, before the miners' start pulse
-local START_TIMEOUT = 180   -- how long to wait for the miners to start
-local IDLE_CONFIRM  = 20    -- how long ALL miners must be OFF to count the meteor as mined
-local QUARRY_TIME   = 120   -- how long the Ender Quarry gets to finish
-local MINERS_PULSE  = 1.0   -- length of the miners' start pulse
-local MINER_START_GRACE = 15  -- a miner still idle this long after the start pulse is shown as OFF (problem)
+local START_DELAY = cfg("START_DELAY", 5)     -- after the catalyst drop, before the miners' start pulse
+local START_TIMEOUT = cfg("START_TIMEOUT", 180)   -- how long to wait for the miners to start
+local IDLE_CONFIRM = cfg("IDLE_CONFIRM", 20)    -- how long ALL miners must be OFF to count the meteor as mined
+local QUARRY_TIME = cfg("QUARRY_TIME", 120)   -- how long the Ender Quarry gets to finish
+local MINERS_PULSE = cfg("MINERS_PULSE", 1.0)   -- length of the miners' start pulse
+local MINER_START_GRACE = cfg("MINER_START_GRACE", 15)  -- a miner still idle this long after the start pulse is shown as OFF (problem)
 
 -- ---- Ritual start (Dynamism Tablet) ----
 -- One pulse on OUT.ritual starts the ritual before the first meteor of a program run.
-local RITUAL_PULSE       = 1.0    -- length of the pulse
-local RITUAL_WARMUP      = 5      -- seconds to wait after the pulse before the catalyst drop
-local RITUAL_EACH_METEOR = false  -- true: send the pulse before every meteor instead of once
+local RITUAL_PULSE = cfg("RITUAL_PULSE", 1.0)    -- length of the pulse
+local RITUAL_WARMUP = cfg("RITUAL_WARMUP", 5)      -- seconds to wait after the pulse before the catalyst drop
+local RITUAL_EACH_METEOR = cfg("RITUAL_EACH_METEOR", false)  -- true: send the pulse before every meteor instead of once
 
 -- ---- Screen resolution ----
 -- nil: fit the screen's shape automatically (uses extra rows for spacing).
 -- Or set it by hand, e.g. {80, 50}. The layout is designed for 80 columns.
-local RESOLUTION = nil
+local RESOLUTION = cfg("RESOLUTION", nil)
 
 -- ---- Ender Quarry signal ----
 -- "pulse": one short pulse starts it, then we just wait QUARRY_TIME
 -- "hold":  signal stays on for QUARRY_TIME, then goes off
-local QUARRY_SIGNAL = "pulse"
-local QUARRY_PULSE  = 1.0   -- length of the pulse in "pulse" mode
+local QUARRY_SIGNAL = cfg("QUARRY_SIGNAL", "pulse")
+local QUARRY_PULSE = cfg("QUARRY_PULSE", 1.0)   -- length of the pulse in "pulse" mode
 
 -- ---- Miners switched off by your own shutdown method ----
 -- true: miners disabled via machine controller cover / soft mallet count as OFF.
 -- false: such miners block the meteor from being counted as mined.
-local IGNORE_DISABLED = true
+local IGNORE_DISABLED = cfg("IGNORE_DISABLED", true)
 
 -- ---- Clock shown on the screen (real-world time) ----
 -- Fixed offset from UTC in hours: 1 = UTC+1 (use 2 for summer time).
-local TIMEZONE_HOURS = 1
+local TIMEZONE_HOURS = cfg("TIMEZONE_HOURS", 1)
 
 -- =====================================================================
 -- HARDWARE ACCESS
@@ -1184,6 +1220,7 @@ end
 
 local function main()
   resetOutputs()
+  logEvent(CONFIG_NOTE, 0x7FD1FF)
   gpu.setResolution(W, H)
   drawStatic()
   while true do
