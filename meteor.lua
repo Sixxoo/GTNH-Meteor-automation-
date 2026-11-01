@@ -75,7 +75,7 @@ local DROPPER_SIDE = cfg("DROPPER_SIDE", sides.down)     -- dropper (below the t
 -- addr: optional address prefix of a specific Redstone I/O or card.
 --       Leave it out to use the computer's default redstone component.
 local OUT = cfg("OUT", {
-  dropper = {side = sides.up},      -- fires the dropper
+  dropper = {addr = "c6352", side = sides.east},   -- fires the dropper (Redstone I/O c6352, dropper to the east)
   ritual  = {side = sides.east},    -- one-time start pulse for the ritual (Dynamism Tablet)
   miners  = {side = sides.south},   -- one-time start pulse for the GT miners
   quarry  = {side = sides.north},   -- starts the Ender Quarry
