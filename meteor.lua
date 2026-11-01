@@ -106,6 +106,7 @@ local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000000)     -- mB shown as a full 
 --           in the game ("Exquisite Diamond"); a text with ':' is taken as internal name
 -- damage:   optional item damage / metadata (only used to find the ME crafting pattern)
 --           (check with tp.getStackInSlot(sides.up, slot).name)
+-- short:    optional shorter catalyst text for the screen (max 24 characters)
 -- tier, lp: shown on the button (machine tier and Life Point cost, information only)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 -- A meteor whose label is still "Meteor N" or "Slot N" counts as not set up and cannot be queued.
@@ -113,15 +114,15 @@ local METEORS = cfg("METEORS", {
   {label = "Graphite",             catalyst = "Exquisite Diamond",               tier = "N/A", lp = 420000,    quarry = true},
   {label = "Overworld",            catalyst = "Field Generator (LV)",            tier = "LV",  lp = 600000,    quarry = false},
   {label = "Nether",               catalyst = "Advanced Replicator",             tier = "MV",  lp = 1200000,   quarry = false},
-  {label = "End",                  catalyst = "Advanced Circuit Assembler II",   tier = "HV",  lp = 3250000,   quarry = true},
+  {label = "End",                  catalyst = "Advanced Circuit Assembler II", short = "Adv. Circuit Assem. II", tier = "HV",  lp = 3250000,   quarry = true},
   {label = "BartWorks",            catalyst = "Elite Packager",                  tier = "LuV", lp = 10000000,  quarry = false},
   {label = "Platinum",             catalyst = "Advanced Scanner IV",             tier = "IV",  lp = 12500000,  quarry = false},
   {label = "Naquadah",             catalyst = "Crystal Mainframe",               tier = "ZPM", lp = 25000000,  quarry = false},
-  {label = "Samarium",             catalyst = "Elite Circuit Assembler II",      tier = "ZPM", lp = 80000000,  quarry = false},
-  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", tier = "ZPM", lp = 90000000,  quarry = false},
+  {label = "Samarium",             catalyst = "Elite Circuit Assembler II", short = "Elite Circuit Assem. II", tier = "ZPM", lp = 80000000,  quarry = false},
+  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", short = "Bloody Ichorium Fus. Cr.", tier = "ZPM", lp = 90000000,  quarry = false},
   {label = "Samarium+Neutron.",    catalyst = "Elite Mass Fabricator II",        tier = "ZPM", lp = 100000000, quarry = false},
   {label = "Indium",               catalyst = "Wetware Supercomputer",           tier = "UV",  lp = 50000000,  quarry = false},
-  {label = "SpNt+FluxElectrum",    catalyst = "Ultimate Botanical Architect",    tier = "UV",  lp = 125000000, quarry = false},
+  {label = "SpNt+FluxElectrum",    catalyst = "Ultimate Botanical Architect", short = "Ult. Botanical Architect", tier = "UV",  lp = 125000000, quarry = false},
 })
 
 -- ---- Crafting the catalysts in the ME system ----
@@ -921,8 +922,10 @@ local function drawButton(b, pressed)
   gpu.fill(b.x, b.y, b.w, b.h, " ")
   gpu.setBackground(bg)
   gpu.fill(b.x, b.y, b.w, faceH, " ")
-  gpu.setBackground(stripe)
-  gpu.fill(b.x, b.y, 1, faceH, " ")
+  if not b.noStripe then
+    gpu.setBackground(stripe)
+    gpu.fill(b.x, b.y, 1, faceH, " ")
+  end
   -- text area: right of the stripe. A long name wraps to a second line when the cell is
   -- tall enough, otherwise it is shortened with a dot.
   local tw = b.w - 2
@@ -930,23 +933,22 @@ local function drawButton(b, pressed)
     -- meteor row: name, tier, LP cost, FILL mark; the catalyst on the second row when there is room
     local inf = b.info
     local nm = inf.name
-    local tw1 = b.w - 1                          -- text width: everything right of the stripe
-    if unicode.len(nm) > 17 then nm = unicode.sub(nm, 1, 16) .. "." end
+    if unicode.len(nm) > 24 then nm = unicode.sub(nm, 1, 23) .. "." end
     local cTier = pressed and C.bg or (TIER_COLOR[inf.tier] or C.dim)
     local cDim = pressed and C.bg or C.dim
     local cLP = pressed and C.bg or C.red
-    local cFill = pressed and C.bg or C.green
+    local cLight = pressed and C.bg or (inf.filler and C.green or C.red)
+    -- columns (b.x+1 = first text column): name / catalyst 24 wide, tier +25, LP cost +30, filler light +36
     local y0 = b.y
-    -- columns (b.x = stripe): name b.x+1 .. b.x+17, tier b.x+19, LP cost b.x+24, filler icon b.x+34
-    put(b.x + 1, y0, nm, fg, bg, 17)
-    put(b.x + 19, y0, inf.tier or "", cTier, bg, 3)
-    put(b.x + 24, y0, inf.lp or "", cLP, bg, 8)
-    put(b.x + 32, y0, " ", fg, bg)
-    if inf.filler then put(b.x + 34, y0, CH.check, cFill, bg) end
+    put(b.x + 1, y0, nm, fg, bg, 24)
+    put(b.x + 25, y0, inf.tier or "", cTier, bg, 3)
+    put(b.x + 30, y0, inf.lp or "", cLP, bg, 5)
+    put(b.x + 36, y0, CH.dot, cLight, bg)
     if faceH >= 2 then
       local cat = inf.catalyst
-      if unicode.len(cat) > tw1 then cat = unicode.sub(cat, 1, tw1 - 1) .. "." end
-      put(b.x + 1, y0 + 1, cat, cDim, bg, tw1)
+      if unicode.len(cat) > 24 then cat = unicode.sub(cat, 1, 23) .. "." end
+      put(b.x + 1, y0 + 1, cat, cDim, bg, 24)
+      put(b.x + 25, y0 + 1, string.rep(" ", 13), fg, bg)
     end
     return
   end
@@ -983,7 +985,7 @@ local function fmtLP(n)
   else
     t = string.format("%d", math.floor(n / 1000 + 0.5)) .. "k"
   end
-  return t .. " LP"
+  return t
 end
 
 -- Meteor list: one entry per row group, the whole left part of the screen. Set-up meteors (catalyst
@@ -993,11 +995,11 @@ for i = 1, #METEORS do
   local lbl = tostring(m.label)
   local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
   addButton({
-    x = 2, y = 5 + (i - 1) * PER, w = 38, h = PER, faceH = (PER >= 3) and (PER - 1) or PER, gapBg = C.card,
+    x = 2, y = 5 + (i - 1) * PER, w = 38, h = PER, faceH = (PER >= 3) and (PER - 1) or PER, gapBg = C.card, noStripe = true,
     empty = not ready, alt = (i % 2 == 0),
     label = lbl,
     info = ready and {
-      name = lbl, catalyst = tostring(m.catalyst), tier = m.tier,
+      name = lbl, catalyst = tostring(m.short or m.catalyst), tier = m.tier,
       lp = fmtLP(m.lp), filler = m.quarry,
     } or nil,
     stripe = function()
@@ -1104,12 +1106,12 @@ local function drawStatic()
   put(1, 2, string.rep(CH.h, W), C.line, C.bg)
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
-  -- meteor list card with its column headers (columns match the rows: name x=3, tier x=21, LP x=26, filler x=34)
+  -- meteor list card with its column headers (columns match the rows: name x=3, tier x=27, LP x=32, filler light x=38)
   cardFrame(1, 3, 40, H - 3, "METEORS")
   put(3, 4, "METEOR", C.dim, C.card)
-  put(21, 4, "TIER", C.dim, C.card)
-  put(26, 4, "LP COST", C.dim, C.card)
-  put(34, 4, "FILLER", C.dim, C.card)
+  put(27, 4, "TIER", C.dim, C.card)
+  put(32, 4, "LP", C.dim, C.card)
+  put(36, 4, "FILL", C.dim, C.card)
   -- cards
   cardFrame(RX, STATE_Y, RW, 5, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
