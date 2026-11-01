@@ -98,7 +98,7 @@ local MINER_ADDRS = cfg("MINER_ADDRS", {
 local FLUID_MATCH = cfg("FLUID_MATCH", "Drilling Fluid")  -- searched in fluid label/name (case, spaces, _ ignored)
 local FLUID_START_MIN = cfg("FLUID_START_MIN", 20000)       -- mB needed to summon a new meteor
 local FLUID_RUN_MIN = cfg("FLUID_RUN_MIN", 1000)        -- mB below which idle miners are not trusted
-local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000)      -- mB shown as a full bar
+local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000000)     -- mB shown as a full bar
 
 -- ---- Meteors (max 16 with this screen layout) ----
 -- label:    text on the button (max 17 characters)
@@ -1102,7 +1102,11 @@ local function drawStatus()
   for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid", "not in interface", "no me pattern", "canceled", "rejected"}) do
     if low:find(w, 1, true) then bad = true end
   end
-  put(RX + 2, STATE_Y + 2, status, bad and C.amber or C.text, C.card, RW - 4)
+  if phase == 0 and (status == "Ready" or status == "Queue is empty") then
+    put(RX + 2, STATE_Y + 2, "", C.text, C.card, RW - 4)
+  else
+    put(RX + 2, STATE_Y + 2, status, bad and C.amber or C.text, C.card, RW - 4)
+  end
 
   drawThin(RX + 2, STATE_Y + 3, 29, progress or 0, C.neon)
   put(RX + 32, STATE_Y + 3, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 5)
@@ -1155,8 +1159,9 @@ local function drawFluid()
   local barW = RW - 4
   local color = enough and C.neon or C.red
   drawThin(RX + 2, FLUID_Y + 1, barW, fluid and (fluid / FLUID_BAR_MAX) or 0, color)
-  -- tick mark = minimum needed to summon a meteor
-  local mark = math.min(barW - 1, math.floor(FLUID_START_MIN / FLUID_BAR_MAX * barW))
+  -- red tick = current amount on the 0 .. FLUID_BAR_MAX scale
+  local frac = fluid and math.max(0, math.min(1, fluid / FLUID_BAR_MAX)) or 0
+  local mark = math.min(barW - 1, math.floor(frac * barW))
   put(RX + 2 + mark, FLUID_Y + 1, CH.vv, C.red, C.card)
 end
 
