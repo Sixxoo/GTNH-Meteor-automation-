@@ -885,6 +885,12 @@ local function addButton(b)
   return b
 end
 
+-- Colors of the machine tiers in the meteor list
+local TIER_COLOR = {
+  ["LV"] = 0xDCE6F2, ["MV"] = 0xFF8A1F, ["HV"] = 0xFFE14D,
+  ["IV"] = 0x00B4FF, ["LuV"] = 0xFF3DDC, ["ZPM"] = 0x2EF0F0, ["UV"] = 0x2BE05A,
+}
+
 -- Meteor buttons: dark face with a neon stripe. Control buttons: neon outline.
 -- The touched button lights up (filled neon) for a moment.
 local function drawButton(b, pressed)
@@ -925,15 +931,15 @@ local function drawButton(b, pressed)
     local inf = b.info
     local nm = inf.name
     if unicode.len(nm) > 18 then nm = unicode.sub(nm, 1, 17) .. "." end
-    local cNeon = pressed and C.bg or C.neon
+    local cTier = pressed and C.bg or (TIER_COLOR[inf.tier] or C.dim)
     local cDim = pressed and C.bg or C.dim
-    local cText = pressed and C.bg or fg
-    local cRed = pressed and C.bg or C.red
+    local cLP = pressed and C.bg or C.red
+    local cFill = pressed and C.bg or C.green
     local y0 = b.y
     put(b.x + 2, y0, nm, fg, bg, 18)
-    put(b.x + 21, y0, inf.tier or "", cNeon, bg, 4)
-    put(b.x + 25, y0, inf.lp or "", cText, bg, 9)
-    if inf.filler then put(b.x + 2 + tw - 4, y0, "FILL", cRed, bg) end
+    put(b.x + 21, y0, inf.tier or "", cTier, bg, 4)
+    put(b.x + 26, y0, inf.lp or "", cLP, bg, 9)
+    if inf.filler then put(b.x + 36, y0, CH.check, cFill, bg) end
     if faceH >= 2 then
       local cat = inf.catalyst
       if unicode.len(cat) > tw then cat = unicode.sub(cat, 1, tw - 1) .. "." end
@@ -1096,8 +1102,11 @@ local function drawStatic()
   put(1, 2, string.rep(CH.h, W), C.line, C.bg)
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
-  put(1, 3, "ADD METEOR TO QUEUE", C.red, C.bg)
-  put(21, 3, string.rep(CH.h, 20), C.line, C.bg)
+  -- column headers of the meteor list (same columns as the rows: name x=3, tier x=22, LP x=27, filler x=35)
+  put(3, 3, "METEOR", C.dim, C.bg)
+  put(22, 3, "TIER", C.dim, C.bg)
+  put(27, 3, "LP COST", C.dim, C.bg)
+  put(35, 3, "FILLER", C.dim, C.bg)
   -- cards
   cardFrame(RX, STATE_Y, RW, 5, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
