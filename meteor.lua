@@ -987,8 +987,7 @@ local function fmtLP(n)
 end
 
 -- Meteor list: one entry per row group, the whole left part of the screen. Set-up meteors (catalyst
--- given and renamed from the default "Meteor N" / "Slot N") are buttons (stripe is red for an Ender
--- Quarry meteor); the others stay dim and cannot be queued.
+-- given and renamed from the default "Meteor N" / "Slot N") are buttons (the others stay dim and cannot be queued.
 for i = 1, #METEORS do
   local m = METEORS[i]
   local lbl = tostring(m.label)
@@ -1003,7 +1002,7 @@ for i = 1, #METEORS do
     } or nil,
     stripe = function()
       if not ready then return C.track end
-      return m.quarry and C.red or C.neon
+      return C.neon
     end,
     action = function()
       if ready then
