@@ -135,7 +135,7 @@ local CRAFT_MISSING = cfg("CRAFT_MISSING", true)      -- false: a missing cataly
 local CRAFT_RETRY = cfg("CRAFT_RETRY", 10)        -- seconds before a failed or canceled craft is requested again
 
 -- ---- Timing (seconds) ----
-local START_DELAY = cfg("START_DELAY", 5)     -- after the catalyst drop, before the miners' start pulse
+local START_DELAY = cfg("START_DELAY", 3)     -- seconds after the ritual start (RITUAL_DELAY after the drop) before the miners' start pulse
 local START_TIMEOUT = cfg("START_TIMEOUT", 180)   -- how long to wait for the miners to start
 local IDLE_CONFIRM = cfg("IDLE_CONFIRM", 3)    -- how long ALL miners must be OFF to count the meteor as mined
 local QUARRY_TIME = cfg("QUARRY_TIME", 120)   -- how long the Ender Quarry gets to finish
@@ -703,7 +703,7 @@ local function stepWaitStart(now)
   if anyActive() then
     idleSince = nil
     setState("mining", "Mining in progress")
-  elseif not pulsed and elapsed(now) >= START_DELAY then
+  elseif not pulsed and elapsed(now) >= RITUAL_DELAY + START_DELAY then
     -- sent only while no miner runs, so a toggle (T flip-flop) cannot switch them off
     pulseOut("miners", MINERS_PULSE)
     pulsed = true
