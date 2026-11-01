@@ -12,7 +12,7 @@
 --
 -- Flow per meteor:
 --   idle -> [ritual] -> wait_start -> mining -> [quarry] -> finish -> idle
---   ("ritual" = ritual start pulse, sent before the first meteor of a run)
+--   ("ritual" = ritual start pulse, sent RITUAL_DELAY seconds after the first catalyst drop)
 -- =====================================================================
 
 local component = require("component")
@@ -137,15 +137,16 @@ local CRAFT_RETRY = cfg("CRAFT_RETRY", 10)        -- seconds before a failed or 
 -- ---- Timing (seconds) ----
 local START_DELAY = cfg("START_DELAY", 5)     -- after the catalyst drop, before the miners' start pulse
 local START_TIMEOUT = cfg("START_TIMEOUT", 180)   -- how long to wait for the miners to start
-local IDLE_CONFIRM = cfg("IDLE_CONFIRM", 20)    -- how long ALL miners must be OFF to count the meteor as mined
+local IDLE_CONFIRM = cfg("IDLE_CONFIRM", 3)    -- how long ALL miners must be OFF to count the meteor as mined
 local QUARRY_TIME = cfg("QUARRY_TIME", 120)   -- how long the Ender Quarry gets to finish
 local MINERS_PULSE = cfg("MINERS_PULSE", 1.0)   -- length of the miners' start pulse
 local MINER_START_GRACE = cfg("MINER_START_GRACE", 15)  -- a miner still idle this long after the start pulse is shown as OFF (problem)
 
 -- ---- Ritual start (Dynamism Tablet) ----
--- One pulse on OUT.ritual starts the ritual before the first meteor of a program run.
+-- One pulse on OUT.ritual starts the ritual, RITUAL_DELAY seconds after the catalyst was dropped
+-- (first meteor of a program run).
 local RITUAL_PULSE = cfg("RITUAL_PULSE", 1.0)    -- length of the pulse
-local RITUAL_WARMUP = cfg("RITUAL_WARMUP", 5)      -- seconds to wait after the pulse before the catalyst drop
+local RITUAL_DELAY = cfg("RITUAL_DELAY", 1)      -- seconds after the catalyst drop before the ritual start pulse
 local RITUAL_EACH_METEOR = cfg("RITUAL_EACH_METEOR", false)  -- true: send the pulse before every meteor instead of once
 
 -- ---- Screen resolution ----
@@ -241,6 +242,7 @@ local pulseAt = nil           -- uptime of that pulse
 local finishedAt = nil        -- uptime when the last meteor was fully mined
 local curHasQuarry = nil      -- does the meteor being processed have a filler step
 local ritualStarted = false   -- ritual start pulse already sent (once per program run)
+local ritualPending = false   -- catalyst dropped, ritual start pulse still to be sent
 local idleSince = nil         -- uptime since when all miners have been OFF
 local fluid = nil             -- Drilling Fluid in ME (mB), nil = unknown
 local fluidNote = nil         -- short reason shown when fluid is unknown
@@ -652,6 +654,7 @@ local function summon(now)
   pulsed = false
   pulseAt = nil
   finishedAt = nil
+  ritualPending = RITUAL_EACH_METEOR or not ritualStarted
   curHasQuarry = METEORS[queue[1].m].quarry and true or false
   for _, m in ipairs(MINERS) do m.worked = false; m.failed = false end
   setState("wait_start", "Meteor summoned, starting miners soon")
@@ -679,29 +682,24 @@ local function stepIdle(now)
       return
     end
   end
-  if RITUAL_EACH_METEOR or not ritualStarted then
-    pulseOut("ritual", RITUAL_PULSE)
-    ritualStarted = true
-    setState("ritual", "Ritual start signal sent")
-  else
-    summon(now)
-  end
-end
-
--- Gives the ritual a moment to start, then drops the catalyst.
--- A missing catalyst is retried here, so the ritual pulse is not sent again.
-local function stepRitual(now)
-  local left = RITUAL_WARMUP - elapsed(now)
-  if left > 0 then
-    status = "Ritual starting (" .. math.ceil(left) .. " s)"
-    progress = 1 - left / RITUAL_WARMUP
-    return
-  end
-  if now < retryAt then return end
   summon(now)
 end
 
 local function stepWaitStart(now)
+  if ritualPending then
+    -- the ritual starts RITUAL_DELAY seconds after the catalyst drop
+    local left = RITUAL_DELAY - elapsed(now)
+    if left > 0 then
+      status = "Ritual starts in " .. math.ceil(left) .. " s"
+      return
+    end
+    pulseOut("ritual", RITUAL_PULSE)
+    ritualStarted = true
+    ritualPending = false
+    status = "Ritual start signal sent"
+    logEvent("Ritual start signal sent", 0x9FD8FF)
+    return
+  end
   if anyActive() then
     idleSince = nil
     setState("mining", "Mining in progress")
@@ -782,7 +780,6 @@ end
 
 local STEPS = {
   idle       = stepIdle,
-  ritual     = stepRitual,
   wait_start = stepWaitStart,
   mining     = stepMining,
   quarry     = stepQuarry,
@@ -1131,7 +1128,7 @@ end
 -- Phase of the current meteor: 0 none, 1 summoning, 2 GT miners, 3 filler blocks (Ender Quarry),
 -- 4 finishing, 5 meteor mined (kept until the next meteor starts).
 local function currentPhase()
-  if state == "ritual" then return 1 end
+  if state == "wait_start" and ritualPending then return 1 end
   if state == "wait_start" or state == "mining" then return 2 end
   if state == "quarry" then return 3 end
   if state == "finish" then return 4 end
