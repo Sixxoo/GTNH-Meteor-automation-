@@ -824,7 +824,7 @@ end
 local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
-local PER = math.max(1, math.floor((H - 4) / 12))   -- screen rows per meteor in the list (12 meteors, rows 4 .. H-1)
+local PER = math.max(1, math.floor((H - 6) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 5 .. H-2)
 local STATE_Y, MINERS_Y, FLUID_Y = 3, 8, 14     -- card tops (state 3-7, miners 8-13, fluid 14-16)
 local QUEUE_Y = 17                             -- queue card: rows 17 .. CTRL_Y-1; the controls sit below it
 local QUEUE_ROWS = CTRL_Y - QUEUE_Y - 2         -- content rows of the queue card (rows QUEUE_Y+1 .. CTRL_Y-2)
@@ -917,7 +917,7 @@ local function drawButton(b, pressed)
   local bg, fg = b.empty and 0x06080D or (b.alt and 0x101826 or C.face), b.empty and C.dim or C.text
   local stripe = b.stripe()
   if pressed then bg, fg = stripe, C.bg end
-  gpu.setBackground(C.bg)
+  gpu.setBackground(b.gapBg or C.bg)
   gpu.fill(b.x, b.y, b.w, b.h, " ")
   gpu.setBackground(bg)
   gpu.fill(b.x, b.y, b.w, faceH, " ")
@@ -930,20 +930,23 @@ local function drawButton(b, pressed)
     -- meteor row: name, tier, LP cost, FILL mark; the catalyst on the second row when there is room
     local inf = b.info
     local nm = inf.name
-    if unicode.len(nm) > 18 then nm = unicode.sub(nm, 1, 17) .. "." end
+    local tw1 = b.w - 1                          -- text width: everything right of the stripe
+    if unicode.len(nm) > 17 then nm = unicode.sub(nm, 1, 16) .. "." end
     local cTier = pressed and C.bg or (TIER_COLOR[inf.tier] or C.dim)
     local cDim = pressed and C.bg or C.dim
     local cLP = pressed and C.bg or C.red
     local cFill = pressed and C.bg or C.green
     local y0 = b.y
-    put(b.x + 2, y0, nm, fg, bg, 18)
-    put(b.x + 21, y0, inf.tier or "", cTier, bg, 4)
-    put(b.x + 26, y0, inf.lp or "", cLP, bg, 9)
-    if inf.filler then put(b.x + 36, y0, CH.check, cFill, bg) end
+    -- columns (b.x = stripe): name b.x+1 .. b.x+17, tier b.x+19, LP cost b.x+24, filler icon b.x+34
+    put(b.x + 1, y0, nm, fg, bg, 17)
+    put(b.x + 19, y0, inf.tier or "", cTier, bg, 3)
+    put(b.x + 24, y0, inf.lp or "", cLP, bg, 8)
+    put(b.x + 32, y0, " ", fg, bg)
+    if inf.filler then put(b.x + 34, y0, CH.check, cFill, bg) end
     if faceH >= 2 then
       local cat = inf.catalyst
-      if unicode.len(cat) > tw then cat = unicode.sub(cat, 1, tw - 1) .. "." end
-      put(b.x + 2, y0 + 1, cat, cDim, bg, tw)
+      if unicode.len(cat) > tw1 then cat = unicode.sub(cat, 1, tw1 - 1) .. "." end
+      put(b.x + 1, y0 + 1, cat, cDim, bg, tw1)
     end
     return
   end
@@ -991,7 +994,7 @@ for i = 1, #METEORS do
   local lbl = tostring(m.label)
   local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
   addButton({
-    x = 1, y = 4 + (i - 1) * PER, w = 40, h = PER, faceH = (PER >= 3) and (PER - 1) or PER,
+    x = 2, y = 5 + (i - 1) * PER, w = 38, h = PER, faceH = (PER >= 3) and (PER - 1) or PER, gapBg = C.card,
     empty = not ready, alt = (i % 2 == 0),
     label = lbl,
     info = ready and {
@@ -1102,11 +1105,12 @@ local function drawStatic()
   put(1, 2, string.rep(CH.h, W), C.line, C.bg)
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
-  -- column headers of the meteor list (same columns as the rows: name x=3, tier x=22, LP x=27, filler x=35)
-  put(3, 3, "METEOR", C.dim, C.bg)
-  put(22, 3, "TIER", C.dim, C.bg)
-  put(27, 3, "LP COST", C.dim, C.bg)
-  put(35, 3, "FILLER", C.dim, C.bg)
+  -- meteor list card with its column headers (columns match the rows: name x=3, tier x=21, LP x=26, filler x=34)
+  cardFrame(1, 3, 40, H - 3, "METEORS")
+  put(3, 4, "METEOR", C.dim, C.card)
+  put(21, 4, "TIER", C.dim, C.card)
+  put(26, 4, "LP COST", C.dim, C.card)
+  put(34, 4, "FILLER", C.dim, C.card)
   -- cards
   cardFrame(RX, STATE_Y, RW, 5, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
