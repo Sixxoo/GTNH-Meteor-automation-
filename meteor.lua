@@ -100,27 +100,28 @@ local FLUID_START_MIN = cfg("FLUID_START_MIN", 20000)       -- mB needed to summ
 local FLUID_RUN_MIN = cfg("FLUID_RUN_MIN", 1000)        -- mB below which idle miners are not trusted
 local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000000)     -- mB shown as a full bar
 
--- ---- Meteors (max 16 with this screen layout) ----
+-- ---- Meteors (max 12 with this screen layout) ----
 -- label:    text on the button (max 17 characters)
 -- catalyst: the catalyst, either the internal name ("modid:item") or the name shown
 --           in the game ("Exquisite Diamond"); a text with ':' is taken as internal name
 -- damage:   optional item damage / metadata (only used to find the ME crafting pattern)
 --           (check with tp.getStackInSlot(sides.up, slot).name)
+-- tier, lp: shown on the button (machine tier and Life Point cost, information only)
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 -- A meteor whose label is still "Meteor N" or "Slot N" counts as not set up and cannot be queued.
 local METEORS = cfg("METEORS", {
-  {label = "Graphite",             catalyst = "Exquisite Diamond",             quarry = true},
-  {label = "Overworld",            catalyst = "Field Generator (LV)",          quarry = false},
-  {label = "Nether",               catalyst = "Advanced Replicator",           quarry = false},
-  {label = "End",                  catalyst = "Advanced Circuit Assembler II", quarry = true},
-  {label = "BartWorks",            catalyst = "Elite Packager",                quarry = false},
-  {label = "Platinum",             catalyst = "Advanced Scanner IV",           quarry = false},
-  {label = "Naquadah",             catalyst = "Crystal Mainframe",             quarry = false},
-  {label = "Samarium",             catalyst = "Elite Circuit Assembler II",    quarry = false},
-  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", quarry = false},
-  {label = "Samarium+Neutron.", catalyst = "Elite Mass Fabricator II",      quarry = false},
-  {label = "Indium",               catalyst = "Wetware Supercomputer",         quarry = false},
-  {label = "SpNt+FluxElectrum", catalyst = "Ultimate Botanical Architect",  quarry = false},
+  {label = "Graphite",             catalyst = "Exquisite Diamond",               tier = "N/A", lp = 420000,    quarry = true},
+  {label = "Overworld",            catalyst = "Field Generator (LV)",            tier = "LV",  lp = 600000,    quarry = false},
+  {label = "Nether",               catalyst = "Advanced Replicator",             tier = "MV",  lp = 1200000,   quarry = false},
+  {label = "End",                  catalyst = "Advanced Circuit Assembler II",   tier = "HV",  lp = 3250000,   quarry = true},
+  {label = "BartWorks",            catalyst = "Elite Packager",                  tier = "LuV", lp = 10000000,  quarry = false},
+  {label = "Platinum",             catalyst = "Advanced Scanner IV",             tier = "IV",  lp = 12500000,  quarry = false},
+  {label = "Naquadah",             catalyst = "Crystal Mainframe",               tier = "ZPM", lp = 25000000,  quarry = false},
+  {label = "Samarium",             catalyst = "Elite Circuit Assembler II",      tier = "ZPM", lp = 80000000,  quarry = false},
+  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", tier = "ZPM", lp = 90000000,  quarry = false},
+  {label = "Samarium+Neutron.",    catalyst = "Elite Mass Fabricator II",        tier = "ZPM", lp = 100000000, quarry = false},
+  {label = "Indium",               catalyst = "Wetware Supercomputer",           tier = "UV",  lp = 50000000,  quarry = false},
+  {label = "SpNt+FluxElectrum",    catalyst = "Ultimate Botanical Architect",    tier = "UV",  lp = 125000000, quarry = false},
 })
 
 -- ---- Crafting the catalysts in the ME system ----
@@ -797,7 +798,7 @@ end
 
 -- Layout (80 columns, 25+ rows):
 --   row 1-2   title bar
---   left      meteor buttons (2 x 8) and the controls START / CLEAR QUEUE / EXIT
+--   left      meteor buttons (2 x 6) and the controls START / CLEAR QUEUE / EXIT
 --   right     cards: STATE, GT MINERS, DRILLING FLUID, QUEUE
 --   last row  message about your last touch
 -- On a taller screen the meteor buttons get taller and the queue card longer.
@@ -823,7 +824,7 @@ end
 local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
-local BH = math.max(2, math.floor((CTRL_Y - 4) / 8))   -- height of one meteor button
+local BH = math.max(3, math.floor((CTRL_Y - 3) / 6))   -- height of one meteor button (2 columns of 6)
 local STATE_Y, MINERS_Y, FLUID_Y = 3, 8, 14     -- card tops (state 3-7, miners 8-13, fluid 14-16)
 local QUEUE_Y = 17                             -- queue card: rows 17 .. H-1
 local QUEUE_ROWS = H - 2 - (QUEUE_Y + 1) + 1   -- content rows of the queue card
@@ -906,7 +907,7 @@ local function drawButton(b, pressed)
       pressed and C.bg or base, bg)
     return
   end
-  local faceH = math.max(1, b.h - 1)            -- the last row stays empty: gap to the next button
+  local faceH = b.faceH or math.max(1, b.h - 1)   -- the last row stays empty: gap to the next button
   local bg, fg = b.empty and 0x06080D or C.face, b.empty and C.dim or C.text
   local stripe = b.stripe()
   if pressed then bg, fg = stripe, C.bg end
@@ -919,6 +920,31 @@ local function drawButton(b, pressed)
   -- text area: right of the stripe. A long name wraps to a second line when the cell is
   -- tall enough, otherwise it is shortened with a dot.
   local tw = b.w - 2
+  if b.info and faceH >= 2 then
+    -- meteor cell: name, (catalyst), tier + LP cost + FILLER mark
+    local inf = b.info
+    local nm = inf.name
+    if unicode.len(nm) > tw then nm = unicode.sub(nm, 1, tw - 1) .. "." end
+    local cat = inf.catalyst
+    if unicode.len(cat) > tw then cat = unicode.sub(cat, 1, tw - 1) .. "." end
+    local n = (faceH >= 3) and 3 or 2
+    local y0 = b.y + math.floor((faceH - n) / 2)
+    local cNeon = pressed and C.bg or C.neon
+    local cDim = pressed and C.bg or C.dim
+    local cText = pressed and C.bg or fg
+    local cRed = pressed and C.bg or C.red
+    put(b.x + 2, y0, nm, fg, bg, tw)
+    local ly = y0 + 1
+    if n == 3 then
+      put(b.x + 2, ly, cat, cDim, bg, tw)
+      ly = ly + 1
+    end
+    put(b.x + 2, ly, string.rep(" ", tw), fg, bg)
+    put(b.x + 2, ly, inf.tier or "", cNeon, bg)
+    put(b.x + 6, ly, inf.lp or "", cText, bg)
+    if inf.filler then put(b.x + 2 + tw - 4, ly, "FILL", cRed, bg) end
+    return
+  end
   local line1, line2 = label, nil
   if unicode.len(label) > tw then
     if faceH >= 2 then
@@ -941,22 +967,37 @@ local function drawButton(b, pressed)
   end
 end
 
-assert(#METEORS <= 16, "Screen layout has room for max. 16 meteors")
+assert(#METEORS <= 12, "Screen layout has room for max. 12 meteors")
 
--- 16 meteor cells: two columns of 8. Set-up meteors (catalyst given and renamed from the default
--- "Meteor N" / "Slot N") are buttons (stripe is red for an Ender Quarry meteor); all other cells stay dim
+-- LP cost as a short text: 420k, 1.2M, 125M
+local function fmtLP(n)
+  if not n then return "" end
+  local t
+  if n >= 1000000 then
+    t = string.format("%.2f", n / 1000000):gsub("0+$", ""):gsub("%.$", "") .. "M"
+  else
+    t = string.format("%d", math.floor(n / 1000 + 0.5)) .. "k"
+  end
+  return t .. " LP"
+end
+
+-- Meteor cells: two columns of 6. Set-up meteors (catalyst given and renamed from the default
+-- "Meteor N" / "Slot N") are buttons (stripe is red for an Ender Quarry meteor); the others stay dim
 -- and cannot be queued.
-for i = 1, 16 do
+for i = 1, #METEORS do
   local m = METEORS[i]
-  -- a meteor is usable once it has a catalyst and has been renamed from the default "Meteor N"
-  local lbl = m and tostring(m.label) or ""
-  local ready = m and m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
-  local col = math.floor((i - 1) / 8)
-  local row = (i - 1) % 8
+  local lbl = tostring(m.label)
+  local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
+  local col = math.floor((i - 1) / 6)
+  local row = (i - 1) % 6
   addButton({
-    x = 1 + col * 20, y = 4 + row * BH, w = 20, h = BH,
+    x = 1 + col * 20, y = 4 + row * BH, w = 20, h = math.min(BH, CTRL_Y - (4 + row * BH)), faceH = BH - 1,
     empty = not ready,
-    label = m and m.label or ("Slot " .. i),
+    label = lbl,
+    info = ready and {
+      name = lbl, catalyst = tostring(m.catalyst), tier = m.tier,
+      lp = fmtLP(m.lp), filler = m.quarry,
+    } or nil,
     stripe = function()
       if not ready then return C.track end
       return m.quarry and C.red or C.neon
@@ -965,7 +1006,7 @@ for i = 1, 16 do
       if ready then
         enqueue(i)
       else
-        logEvent((m and m.label or ("Slot " .. i)) .. " is not set up (METEORS)", C.amber, true)
+        logEvent(lbl .. " is not set up (METEORS)", C.amber, true)
       end
     end,
   })
