@@ -798,8 +798,8 @@ end
 
 -- Layout (80 columns, 25+ rows):
 --   row 1-2   title bar
---   left      meteor buttons (2 x 6) and the controls START / CLEAR QUEUE / EXIT
---   right     cards: STATE, GT MINERS, DRILLING FLUID, QUEUE
+--   left      the meteor list (12 rows)
+--   right     cards: STATE, GT MINERS, DRILLING FLUID, QUEUE and below it START / CLEAR QUEUE / EXIT
 --   last row  message about your last touch
 -- On a taller screen the meteor buttons get taller and the queue card longer.
 
@@ -824,10 +824,10 @@ end
 local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
-local BH = math.max(3, math.floor((CTRL_Y - 3) / 6))   -- height of one meteor button (2 columns of 6)
+local PER = math.max(1, math.floor((H - 4) / 12))   -- screen rows per meteor in the list (12 meteors, rows 4 .. H-1)
 local STATE_Y, MINERS_Y, FLUID_Y = 3, 8, 14     -- card tops (state 3-7, miners 8-13, fluid 14-16)
-local QUEUE_Y = 17                             -- queue card: rows 17 .. H-1
-local QUEUE_ROWS = H - 2 - (QUEUE_Y + 1) + 1   -- content rows of the queue card
+local QUEUE_Y = 17                             -- queue card: rows 17 .. CTRL_Y-1; the controls sit below it
+local QUEUE_ROWS = CTRL_Y - QUEUE_Y - 2         -- content rows of the queue card (rows QUEUE_Y+1 .. CTRL_Y-2)
 
 local function put(x, y, text, fg, bg, width)
   text = tostring(text)
@@ -908,7 +908,7 @@ local function drawButton(b, pressed)
     return
   end
   local faceH = b.faceH or math.max(1, b.h - 1)   -- the last row stays empty: gap to the next button
-  local bg, fg = b.empty and 0x06080D or C.face, b.empty and C.dim or C.text
+  local bg, fg = b.empty and 0x06080D or (b.alt and 0x101826 or C.face), b.empty and C.dim or C.text
   local stripe = b.stripe()
   if pressed then bg, fg = stripe, C.bg end
   gpu.setBackground(C.bg)
@@ -920,29 +920,25 @@ local function drawButton(b, pressed)
   -- text area: right of the stripe. A long name wraps to a second line when the cell is
   -- tall enough, otherwise it is shortened with a dot.
   local tw = b.w - 2
-  if b.info and faceH >= 2 then
-    -- meteor cell: name, (catalyst), tier + LP cost + FILLER mark
+  if b.info then
+    -- meteor row: name, tier, LP cost, FILL mark; the catalyst on the second row when there is room
     local inf = b.info
     local nm = inf.name
-    if unicode.len(nm) > tw then nm = unicode.sub(nm, 1, tw - 1) .. "." end
-    local cat = inf.catalyst
-    if unicode.len(cat) > tw then cat = unicode.sub(cat, 1, tw - 1) .. "." end
-    local n = (faceH >= 3) and 3 or 2
-    local y0 = b.y + math.floor((faceH - n) / 2)
+    if unicode.len(nm) > 18 then nm = unicode.sub(nm, 1, 17) .. "." end
     local cNeon = pressed and C.bg or C.neon
     local cDim = pressed and C.bg or C.dim
     local cText = pressed and C.bg or fg
     local cRed = pressed and C.bg or C.red
-    put(b.x + 2, y0, nm, fg, bg, tw)
-    local ly = y0 + 1
-    if n == 3 then
-      put(b.x + 2, ly, cat, cDim, bg, tw)
-      ly = ly + 1
+    local y0 = b.y
+    put(b.x + 2, y0, nm, fg, bg, 18)
+    put(b.x + 21, y0, inf.tier or "", cNeon, bg, 4)
+    put(b.x + 25, y0, inf.lp or "", cText, bg, 9)
+    if inf.filler then put(b.x + 2 + tw - 4, y0, "FILL", cRed, bg) end
+    if faceH >= 2 then
+      local cat = inf.catalyst
+      if unicode.len(cat) > tw then cat = unicode.sub(cat, 1, tw - 1) .. "." end
+      put(b.x + 2, y0 + 1, cat, cDim, bg, tw)
     end
-    put(b.x + 2, ly, string.rep(" ", tw), fg, bg)
-    put(b.x + 2, ly, inf.tier or "", cNeon, bg)
-    put(b.x + 6, ly, inf.lp or "", cText, bg)
-    if inf.filler then put(b.x + 2 + tw - 4, ly, "FILL", cRed, bg) end
     return
   end
   local line1, line2 = label, nil
@@ -981,18 +977,16 @@ local function fmtLP(n)
   return t .. " LP"
 end
 
--- Meteor cells: two columns of 6. Set-up meteors (catalyst given and renamed from the default
--- "Meteor N" / "Slot N") are buttons (stripe is red for an Ender Quarry meteor); the others stay dim
--- and cannot be queued.
+-- Meteor list: one entry per row group, the whole left part of the screen. Set-up meteors (catalyst
+-- given and renamed from the default "Meteor N" / "Slot N") are buttons (stripe is red for an Ender
+-- Quarry meteor); the others stay dim and cannot be queued.
 for i = 1, #METEORS do
   local m = METEORS[i]
   local lbl = tostring(m.label)
   local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
-  local col = math.floor((i - 1) / 6)
-  local row = (i - 1) % 6
   addButton({
-    x = 1 + col * 20, y = 4 + row * BH, w = 20, h = math.min(BH, CTRL_Y - (4 + row * BH)), faceH = BH - 1,
-    empty = not ready,
+    x = 1, y = 4 + (i - 1) * PER, w = 40, h = PER, faceH = (PER >= 3) and (PER - 1) or PER,
+    empty = not ready, alt = (i % 2 == 0),
     label = lbl,
     info = ready and {
       name = lbl, catalyst = tostring(m.catalyst), tier = m.tier,
@@ -1013,7 +1007,7 @@ for i = 1, #METEORS do
 end
 
 local startBtn = addButton({
-  x = 1, y = CTRL_Y, w = 12, h = 3, outline = true,
+  x = RX, y = CTRL_Y, w = 12, h = 3, outline = true,
   label = function() return running and "STOP" or "START" end,
   color = function() return running and C.red or C.green end,
   action = function()
@@ -1023,7 +1017,7 @@ local startBtn = addButton({
 })
 
 addButton({
-  x = 14, y = CTRL_Y, w = 15, h = 3, outline = true, label = "CLEAR QUEUE",
+  x = RX + 13, y = CTRL_Y, w = 15, h = 3, outline = true, label = "CLEAR QUEUE",
   color = function() return C.amber end,
   action = function()
     -- the meteor already summoned (first in queue) is kept; the others go back to the Interface
@@ -1039,7 +1033,7 @@ addButton({
 })
 
 addButton({
-  x = 31, y = CTRL_Y, w = 10, h = 3, outline = true, label = "EXIT",
+  x = RX + 29, y = CTRL_Y, w = 9, h = 3, outline = true, label = "EXIT",
   color = function() return C.red end,
   id = "exit",
 })
@@ -1103,12 +1097,12 @@ local function drawStatic()
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
   put(1, 3, "ADD METEOR TO QUEUE", C.red, C.bg)
-  put(21, 3, string.rep(CH.h, 19), C.line, C.bg)
+  put(21, 3, string.rep(CH.h, 20), C.line, C.bg)
   -- cards
   cardFrame(RX, STATE_Y, RW, 5, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
   cardFrame(RX, FLUID_Y, RW, 3, "DRILLING FLUID")
-  cardFrame(RX, QUEUE_Y, RW, H - QUEUE_Y, "QUEUE")
+  cardFrame(RX, QUEUE_Y, RW, CTRL_Y - QUEUE_Y, "QUEUE")
   for _, b in ipairs(buttons) do drawButton(b) end
   drawnRunning = running
 end
