@@ -825,7 +825,7 @@ end
 local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
-local PER = math.max(1, math.floor((H - 6) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 5 .. H-2)
+local PER = math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
 local STATE_Y, MINERS_Y, FLUID_Y = 3, 8, 14     -- card tops (state 3-7, miners 8-13, fluid 14-16)
 local QUEUE_Y = 17                             -- queue card: rows 17 .. CTRL_Y-1; the controls sit below it
 local QUEUE_ROWS = CTRL_Y - QUEUE_Y - 2         -- content rows of the queue card (rows QUEUE_Y+1 .. CTRL_Y-2)
@@ -995,7 +995,7 @@ for i = 1, #METEORS do
   local lbl = tostring(m.label)
   local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
   addButton({
-    x = 2, y = 5 + (i - 1) * PER, w = 38, h = PER, faceH = (PER >= 3) and (PER - 1) or PER, gapBg = C.card, noStripe = true,
+    x = 2, y = 4 + (i - 1) * PER, w = 38, h = PER, faceH = (PER >= 3) and (PER - 1) or PER, gapBg = C.card, noStripe = true,
     empty = not ready, alt = (i % 2 == 0),
     label = lbl,
     info = ready and {
@@ -1106,12 +1106,12 @@ local function drawStatic()
   put(1, 2, string.rep(CH.h, W), C.line, C.bg)
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
-  -- meteor list card with its column headers (columns match the rows: name x=3, tier x=27, LP x=32, filler light x=38)
-  cardFrame(1, 3, 40, H - 3, "METEORS")
-  put(3, 4, "METEOR", C.dim, C.card)
-  put(27, 4, "TIER", C.dim, C.card)
-  put(32, 4, "LP", C.dim, C.card)
-  put(36, 4, "FILL", C.dim, C.card)
+  -- meteor list card: the column titles sit in its top border, above their columns
+  cardFrame(1, 3, 40, H - 3, "")
+  put(2, 3, " METEOR ", C.text, C.card)
+  put(26, 3, " TIER ", C.text, C.card)
+  put(31, 3, " LP ", C.text, C.card)
+  put(35, 3, " FILL", C.text, C.card)
   -- cards
   cardFrame(RX, STATE_Y, RW, 5, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
