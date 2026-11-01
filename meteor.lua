@@ -1090,10 +1090,10 @@ local PHASE_COLOR = {C.neon, C.yellow, 0xB07CFF, C.green}
 local function drawStatus()
   local phase = currentPhase()
   if phase == 5 then phase = 4 end
+  put(RX + 2, STATE_Y + 1, "PHASE " .. phase .. "/4  ", C.dim, C.card, 10)
   if phase == 0 then
-    put(RX + 2, STATE_Y + 1, "Idle", C.dim, C.card, RW - 4)
+    put(RX + 12, STATE_Y + 1, "Ready to summon Meteor", C.text, C.card, RW - 14)
   else
-    put(RX + 2, STATE_Y + 1, "PHASE " .. phase .. "/4  ", C.dim, C.card, 10)
     put(RX + 12, STATE_Y + 1, PHASE_NAMES[phase], PHASE_COLOR[phase], C.card, RW - 14)
   end
 
