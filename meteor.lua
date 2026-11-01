@@ -109,9 +109,18 @@ local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000000)     -- mB shown as a full 
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 -- A meteor whose label is still "Meteor N" or "Slot N" counts as not set up and cannot be queued.
 local METEORS = cfg("METEORS", {
-  {label = "Exquisite Diamond", catalyst = "Exquisite Diamond", quarry = false},
-  {label = "Slot 2",   catalyst = "minecraft:gold_block",    quarry = true},
-  {label = "Slot 3",   catalyst = "minecraft:diamond_block", quarry = true},
+  {label = "Graphite",             catalyst = "Exquisite Diamond",             quarry = true},
+  {label = "Overworld",            catalyst = "Field Generator (LV)",          quarry = false},
+  {label = "Nether",               catalyst = "Advanced Replicator",           quarry = false},
+  {label = "End",                  catalyst = "Advanced Circuit Assembler II", quarry = true},
+  {label = "BartWorks",            catalyst = "Elite Packager",                quarry = false},
+  {label = "Platinum",             catalyst = "Advanced Scanner IV",           quarry = false},
+  {label = "Naquadah",             catalyst = "Crystal Mainframe",             quarry = false},
+  {label = "Samarium",             catalyst = "Elite Circuit Assembler II",    quarry = false},
+  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", quarry = false},
+  {label = "Samarium+Neutron.", catalyst = "Elite Mass Fabricator II",      quarry = false},
+  {label = "Indium",               catalyst = "Wetware Supercomputer",         quarry = false},
+  {label = "SpNt+FluxElectrum", catalyst = "Ultimate Botanical Architect",  quarry = false},
 })
 
 -- ---- Crafting the catalysts in the ME system ----
