@@ -1064,6 +1064,16 @@ addButton({
 
 -- Lights up the touched button for a moment, then runs its action.
 local function handleTouch(x, y)
+  if x >= RX + RW - 4 and x <= RX + RW - 2 and y > QUEUE_Y and y <= QUEUE_Y + QUEUE_ROWS then
+    local r = y - QUEUE_Y
+    local e = queue[r]
+    if e and e.loc ~= "fired" and not (r == QUEUE_ROWS and #queue > QUEUE_ROWS) then
+      returnCatalyst(e)
+      table.remove(queue, r)
+      logEvent("Removed " .. METEORS[e.m].label .. " from queue", 0xFFCC66, true)
+    end
+    return
+  end
   for _, b in ipairs(buttons) do
     if x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h then
       drawButton(b, true)
@@ -1308,8 +1318,12 @@ local function drawQueue()
       end
     end
     local y = QUEUE_Y + r
-    put(RX + 2, y, line, fg, C.card, RW - 4)
-    if tag then put(RX + RW - 2 - #tag - 1, y, tag, tagColor, C.card) end
+    put(RX + 2, y, line, fg, C.card, RW - 8)
+    if tag then put(RX + RW - 5 - #tag, y, tag, tagColor, C.card) end
+    -- red cross: removes this meteor from the queue (not the one already summoned)
+    if e and not (r == QUEUE_ROWS and #queue > QUEUE_ROWS) then
+      put(RX + RW - 3, y, e.loc == "fired" and " " or unicode.char(0xD7), C.red, C.card)
+    end
   end
 end
 
