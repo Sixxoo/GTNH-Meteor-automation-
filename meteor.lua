@@ -111,18 +111,16 @@ local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000000)     -- mB shown as a full 
 -- quarry:   true if the meteor has filler blocks for the Ender Quarry
 -- A meteor whose label is still "Meteor N" or "Slot N" counts as not set up and cannot be queued.
 local METEORS = cfg("METEORS", {
-  {label = "Graphite",             catalyst = "Exquisite Diamond",               tier = "N/A", lp = 420000,    quarry = true},
   {label = "Overworld",            catalyst = "Field Generator (LV)",            tier = "LV",  lp = 600000,    quarry = false},
   {label = "Nether",               catalyst = "Advanced Replicator",             tier = "MV",  lp = 1200000,   quarry = false},
-  {label = "End",                  catalyst = "Advanced Circuit Assembler II", short = "Adv. Circuit Assem. II", tier = "HV",  lp = 3250000,   quarry = true},
-  {label = "BartWorks",            catalyst = "Elite Packager",                  tier = "LuV", lp = 10000000,  quarry = false},
   {label = "Platinum",             catalyst = "Advanced Scanner IV",             tier = "IV",  lp = 12500000,  quarry = false},
+  {label = "BartWorks",            catalyst = "Elite Packager",                  tier = "LuV", lp = 10000000,  quarry = false},
   {label = "Naquadah",             catalyst = "Crystal Mainframe",               tier = "ZPM", lp = 25000000,  quarry = false},
   {label = "Samarium",             catalyst = "Elite Circuit Assembler II", short = "Elite Circuit Assem. II", tier = "ZPM", lp = 80000000,  quarry = false},
-  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", short = "Bloody Ichorium Fus. Cr.", tier = "ZPM", lp = 90000000,  quarry = false},
-  {label = "Samarium+Neutron.",    catalyst = "Elite Mass Fabricator II",        tier = "ZPM", lp = 100000000, quarry = false},
+  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", short = "Bloody Ichorium Fusion", tier = "ZPM", lp = 90000000,  quarry = false},
+  {label = "Samarium+Neutron.",    catalyst = "Elite Mass Fabricator II", short = "Elite Mass Fabric. II",        tier = "ZPM", lp = 100000000, quarry = false},
   {label = "Indium",               catalyst = "Wetware Supercomputer",           tier = "UV",  lp = 50000000,  quarry = false},
-  {label = "SpNt+FluxElectrum",    catalyst = "Ultimate Botanical Architect", short = "Ult. Botanical Architect", tier = "UV",  lp = 125000000, quarry = false},
+  {label = "SpNt+FluxElectrum",    catalyst = "Ultimate Botanical Architect", short = "Ult. Botanical Archit.", tier = "UV",  lp = 125000000, quarry = false},
 })
 
 -- ---- Crafting the catalysts in the ME system ----
@@ -152,7 +150,7 @@ local RITUAL_EACH_METEOR = cfg("RITUAL_EACH_METEOR", false)  -- true: send the p
 -- ---- Screen resolution ----
 -- nil: fit the screen's shape automatically (uses extra rows for spacing).
 -- Or set it by hand, e.g. {80, 50}. The layout is designed for 80 columns.
-local RESOLUTION = cfg("RESOLUTION", nil)
+local RESOLUTION = cfg("RESOLUTION", {80, 35})
 
 -- ---- Ender Quarry signal ----
 -- "pulse": one short pulse starts it, then we just wait QUARRY_TIME
@@ -832,7 +830,7 @@ end
 local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
-local PER = (H >= 30) and 2 or math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
+local PER = (H >= 33) and 3 or (H >= 30) and 2 or math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
 local STATE_Y = 3
 local STATE_H = (H >= 30) and 10 or 7            -- tall STATE card: 4 framed phases (2 rows each) + status line; compact: 1 row per phase
 local MINERS_Y = STATE_Y + STATE_H              -- miners card: 6 rows
@@ -932,7 +930,7 @@ local function drawButton(b, pressed)
   gpu.setBackground(b.gapBg or C.bg)
   gpu.fill(b.x, b.y, b.w, b.h, " ")
   gpu.setBackground(bg)
-  gpu.fill(b.x, b.y, b.w, faceH, " ")
+  gpu.fill(b.x, b.y + (b.faceOff or 0), b.w, faceH, " ")
   if not b.noStripe then
     gpu.setBackground(stripe)
     gpu.fill(b.x, b.y, 1, faceH, " ")
@@ -941,7 +939,7 @@ local function drawButton(b, pressed)
   -- tall enough, otherwise it is shortened with a dot.
   local tw = b.w - 2
   if b.info then
-    -- meteor row: name, tier, LP cost, FILL mark; the catalyst on the second row when there is room
+    -- meteor entry: name in the divider, catalyst, tier and LP cost below
     local inf = b.info
     local nm = inf.name
     if unicode.len(nm) > 24 then nm = unicode.sub(nm, 1, 23) .. "." end
@@ -949,21 +947,22 @@ local function drawButton(b, pressed)
     local cDim = pressed and C.bg or C.dim
     local cLP = pressed and C.bg or C.red
     local cLight = pressed and C.bg or C.green
-    -- columns (b.x+1 = first text column): name / catalyst 24 wide, tier +25, LP cost +30, filler light +36
-    local y0 = b.y
-    put(b.x + 1, y0, nm, fg, bg, 24)
-    put(b.x + 25, y0, inf.tier or "", cTier, bg, 3)
-    put(b.x + 30, y0, inf.lp or "", cLP, bg, 5)
-    if inf.filler then put(b.x + 36, y0, CH.dot, cLight, bg) end
-    if b.h >= 2 then
-      -- blue separator under the meteor, the catalyst name sits in it like a title
-      local lc, rc = CH.lt, CH.rt
-      if inf.last then lc, rc = CH.bl, CH.br end
-      put(b.x - 1, y0 + 1, lc .. string.rep(CH.h, b.w) .. rc, C.neon, C.card)
-      local cat = " " .. inf.catalyst .. " "
-      if unicode.len(cat) > b.w - 4 then cat = unicode.sub(cat, 1, b.w - 5) .. ". " end
-      put(b.x + 1, y0 + 1, cat, C.sub, C.card)
+    -- PER 3: row b.y name, row b.y+1 catalyst / tier / LP, row b.y+2 blue divider between meteors
+    -- PER 2: row b.y blue divider titled with the name, row b.y+1 catalyst / tier / LP
+    local y0 = b.y + 1
+    if PER == 3 then
+      put(b.x + 1, b.y, nm, pressed and C.bg or C.text, bg, 24)
+      if b.h >= 3 then put(b.x - 1, b.y + 2, CH.lt .. string.rep(CH.h, b.w) .. CH.rt, C.neon, C.card) end
+    else
+      put(b.x - 1, b.y, CH.lt .. string.rep(CH.h, b.w) .. CH.rt, C.neon, C.card)
+      put(b.x + 1, b.y, " " .. nm .. " ", C.text, C.card)
     end
+    local cat = inf.catalyst
+    if unicode.len(cat) > 23 then cat = unicode.sub(cat, 1, 22) .. "." end
+    put(b.x + 1, y0, cat, pressed and C.bg or C.neon, bg, 24)
+    put(b.x + 27, y0, inf.tier or "", cTier, bg, 3)
+    local lp = inf.lp or ""
+    put(b.x + 32, y0, string.rep(" ", 5 - #lp) .. lp, cLP, bg, 5)
     return
   end
   local line1, line2 = label, nil
@@ -1009,11 +1008,11 @@ for i = 1, #METEORS do
   local lbl = tostring(m.label)
   local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
   addButton({
-    x = 2, y = 4 + (i - 1) * PER, w = 38, h = PER, faceH = 1, gapBg = C.card, noStripe = true,
+    x = 2, y = 4 + (i - 1) * PER, w = 38, h = (PER == 3 and i == #METEORS) and 2 or PER, faceH = (PER == 3) and 2 or 1, faceOff = (PER == 2) and 1 or 0, gapBg = C.card, noStripe = true,
     empty = not ready, alt = (i % 2 == 0),
     label = lbl,
     info = ready and {
-      name = lbl, catalyst = tostring(m.catalyst), last = (i == #METEORS), tier = m.tier,
+      name = lbl, catalyst = tostring(m.short or m.catalyst), tier = m.tier,
       lp = fmtLP(m.lp), filler = m.quarry,
     } or nil,
     stripe = function()
@@ -1131,11 +1130,10 @@ local function drawStatic()
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
   -- meteor list card: the column titles sit in its top border, above their columns
-  cardFrame(1, 3, 40, (PER == 2) and 25 or (H - 3), "")
+  cardFrame(1, 3, 40, (PER == 3) and (3 * #METEORS + 1) or (PER == 2) and (2 * #METEORS + 2) or (H - 3), "")
   put(2, 3, " METEOR ", C.text, C.card)
-  put(26, 3, " TIER ", C.text, C.card)
-  put(31, 3, " LP ", C.text, C.card)
-  put(35, 3, " FILL", C.text, C.card)
+  put(28, 3, " TIER ", C.text, C.card)
+  put(36, 3, " LP ", C.text, C.card)
   -- cards
   cardFrame(RX, STATE_Y, RW, STATE_H, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
