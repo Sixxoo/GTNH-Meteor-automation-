@@ -146,7 +146,7 @@ local RITUAL_EACH_METEOR = cfg("RITUAL_EACH_METEOR", false)  -- true: send the p
 -- ---- Screen resolution ----
 -- nil: fit the screen's shape automatically (uses extra rows for spacing).
 -- Or set it by hand, e.g. {80, 50}. The layout is designed for 80 columns.
-local RESOLUTION = cfg("RESOLUTION", {80, 35})
+local RESOLUTION = cfg("RESOLUTION", nil)
 
 -- ---- Miners switched off by your own shutdown method ----
 -- true: miners disabled via machine controller cover / soft mallet count as OFF.
@@ -284,8 +284,54 @@ end
 local function logEvent(text, color, isAction)
   table.insert(events, 1, {t = nowText(), text = text, color = color or 0xDDDDDD,
                            action = isAction, at = computer.uptime()})
-  if #events > 60 then events[#events] = nil end
+  if #events > 200 then events[#events] = nil end
   if isAction then lastAction = {text = text, at = computer.uptime()} end
+end
+
+-- ---------- statistics (saved in a small file so they survive a restart) ----------
+local STATS_FILE = "/home/meteor_stats.lua"
+local stats = {mined = 0, time = 0, lp = 0, fastest = nil, slowest = nil, errors = 0, byType = {}, typeTime = {}, typeN = {}, history = {}}
+local programStart = computer.uptime()
+do
+  local okS, ser = pcall(require, "serialization")
+  local f = okS and io.open(STATS_FILE, "r")
+  if f then
+    local data = f:read("*a")
+    f:close()
+    local okU, t = pcall(ser.unserialize, data)
+    if okU and type(t) == "table" then
+      for k, v in pairs(t) do stats[k] = v end
+    end
+    stats.typeTime = stats.typeTime or {}
+    stats.typeN = stats.typeN or {}
+  end
+end
+
+local function saveStats()
+  pcall(function()
+    local ser = require("serialization")
+    local f = io.open(STATS_FILE, "w")
+    if f then f:write(ser.serialize(stats)); f:close() end
+  end)
+end
+
+-- Called when a meteor is fully mined; dur = mining time in seconds (or nil).
+local function recordMeteor(idx, dur)
+  local m = METEORS[idx]
+  stats.mined = stats.mined + 1
+  stats.lp = stats.lp + (m.lp or 0)
+  local key = tostring(m.label)
+  stats.byType[key] = (stats.byType[key] or 0) + 1
+  if dur then
+    stats.typeTime[key] = (stats.typeTime[key] or 0) + dur
+    stats.typeN[key] = (stats.typeN[key] or 0) + 1
+    stats.time = stats.time + dur
+    if not stats.fastest or dur < stats.fastest then stats.fastest = dur end
+    if not stats.slowest or dur > stats.slowest then stats.slowest = dur end
+    stats.history[#stats.history + 1] = dur
+    while #stats.history > 40 do table.remove(stats.history, 1) end
+  end
+  saveStats()
 end
 
 local STATE_LABEL = {
@@ -358,7 +404,10 @@ local function pollHardware(now)
     elseif m.active == false and not m.worked and pulsed and pulseAt
         and (state == "wait_start" or state == "mining")
         and now - pulseAt > MINER_START_GRACE then
-      if not m.failed then logEvent(m.name .. " did not start (power / maintenance?)", 0xFF7777) end
+      if not m.failed then
+        logEvent(m.name .. " did not start (power / maintenance?)", 0xFF7777)
+        stats.errors = (stats.errors or 0) + 1
+      end
       m.failed = true
     end
   end
@@ -739,6 +788,10 @@ local function stepMining(now)
 end
 
 local function stepFinish()
+  local head = queue[1]
+  local dur = minersStartedAt and (computer.uptime() - minersStartedAt - IDLE_CONFIRM) or nil
+  if dur and dur < 0 then dur = 0 end
+  if head then recordMeteor(head.m, dur) end
   table.remove(queue, 1)
   idleSince = nil
   finishedAt = computer.uptime()
@@ -767,26 +820,28 @@ end
 --   last row  message about your last touch
 -- On a taller screen the meteor buttons get taller and the queue card longer.
 
--- Picks the screen resolution: 80 columns, rows from the screen's shape.
+-- Picks the screen resolution: 35 rows, as many columns as the screen's shape needs (at least 80).
 local function fitResolution()
   local maxW, maxH = gpu.maxResolution()
   if RESOLUTION then
     return math.min(RESOLUTION[1], maxW), math.min(RESOLUTION[2], maxH)
   end
-  local w, h = math.min(80, maxW), 25
+  local h = math.min(35, maxH)
+  local w = math.min(80, maxW)
   local ok, a, b = pcall(function()
     return component.proxy(gpu.getScreen()).getAspectRatio()
   end)
-  if ok and a and b and a > 0 then
+  if ok and a and b and a > 0 and b > 0 then
     -- a character cell is twice as tall as wide, so w/h = 2*a/b fills the screen
-    local ideal = math.floor(w * b / (2 * a) + 0.5)
-    h = math.max(25, math.min(ideal, maxH))
+    w = math.max(80, math.min(math.floor(h * 2 * a / b + 0.5), maxW))
   end
   return w, h
 end
 
 local W, H = fitResolution()
-local RX, RW = 42, 38                          -- right column (cards)
+local LW = 40 + math.floor((W - 80) / 2)      -- width of the meteor list card
+local RX = LW + 2                              -- right column (cards)
+local RW = W - RX
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
 local PER = (H >= 33) and 3 or (H >= 30) and 2 or math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
 local STATE_Y = 3
@@ -900,7 +955,8 @@ local function drawButton(b, pressed)
     -- meteor entry: name in the divider, catalyst, tier and LP cost below
     local inf = b.info
     local nm = inf.name
-    if unicode.len(nm) > 24 then nm = unicode.sub(nm, 1, 23) .. "." end
+    local nmw = b.w - 14
+    if unicode.len(nm) > nmw then nm = unicode.sub(nm, 1, nmw - 1) .. "." end
     local cTier = pressed and C.bg or (TIER_COLOR[inf.tier] or C.dim)
     local cDim = pressed and C.bg or C.dim
     local cLP = pressed and C.bg or C.red
@@ -909,18 +965,18 @@ local function drawButton(b, pressed)
     -- PER 2: row b.y blue divider titled with the name, row b.y+1 catalyst / tier / LP
     local y0 = b.y + 1
     if PER == 3 then
-      put(b.x + 1, b.y, nm, pressed and C.bg or C.text, bg, 24)
+      put(b.x + 1, b.y, nm, pressed and C.bg or C.text, bg, nmw)
       if b.h >= 3 then put(b.x - 1, b.y + 2, CH.lt .. string.rep(CH.h, b.w) .. CH.rt, C.neon, C.card) end
     else
       put(b.x - 1, b.y, CH.lt .. string.rep(CH.h, b.w) .. CH.rt, C.neon, C.card)
       put(b.x + 1, b.y, " " .. nm .. " ", C.text, C.card)
     end
     local cat = inf.catalyst
-    if unicode.len(cat) > 23 then cat = unicode.sub(cat, 1, 22) .. "." end
-    put(b.x + 1, y0, cat, pressed and C.bg or C.neon, bg, 24)
-    put(b.x + 27, y0, inf.tier or "", cTier, bg, 3)
+    if unicode.len(cat) > nmw - 1 then cat = unicode.sub(cat, 1, nmw - 2) .. "." end
+    put(b.x + 1, y0, cat, pressed and C.bg or C.neon, bg, nmw)
+    put(b.x + b.w - 11, y0, inf.tier or "", cTier, bg, 3)
     local lp = inf.lp or ""
-    put(b.x + 32, y0, string.rep(" ", 5 - #lp) .. lp, cLP, bg, 5)
+    put(b.x + b.w - 6, y0, string.rep(" ", 5 - #lp) .. lp, cLP, bg, 5)
     return
   end
   local line1, line2 = label, nil
@@ -966,7 +1022,7 @@ for i = 1, #METEORS do
   local lbl = tostring(m.label)
   local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
   addButton({
-    x = 2, y = 4 + (i - 1) * PER, w = 38, h = (PER == 3 and i == #METEORS) and 2 or PER, faceH = (PER == 3) and 2 or 1, faceOff = (PER == 2) and 1 or 0, gapBg = C.card, noStripe = true,
+    x = 2, y = 4 + (i - 1) * PER, w = LW - 2, h = (PER == 3 and i == #METEORS) and 2 or PER, faceH = (PER == 3) and 2 or 1, faceOff = (PER == 2) and 1 or 0, gapBg = C.card, noStripe = true,
     empty = not ready, alt = (i % 2 == 0),
     label = lbl,
     info = ready and {
@@ -987,8 +1043,11 @@ for i = 1, #METEORS do
   })
 end
 
+local CW1 = math.floor(RW * 12 / 38)
+local CW2 = math.floor(RW * 15 / 38)
+
 local startBtn = addButton({
-  x = RX, y = CTRL_Y, w = 12, h = 3, outline = true,
+  x = RX, y = CTRL_Y, w = CW1, h = 3, outline = true,
   label = function() return running and "STOP" or "START" end,
   color = function() return running and C.red or C.green end,
   action = function()
@@ -998,7 +1057,7 @@ local startBtn = addButton({
 })
 
 addButton({
-  x = RX + 13, y = CTRL_Y, w = 15, h = 3, outline = true, label = "CLEAR QUEUE",
+  x = RX + CW1 + 1, y = CTRL_Y, w = CW2, h = 3, outline = true, label = "CLEAR QUEUE",
   color = function() return C.amber end,
   action = function()
     -- the meteor already summoned (first in queue) is kept; the others go back to the Interface
@@ -1014,13 +1073,33 @@ addButton({
 })
 
 addButton({
-  x = RX + 29, y = CTRL_Y, w = 9, h = 3, outline = true, label = "EXIT",
+  x = RX + CW1 + CW2 + 2, y = CTRL_Y, w = RW - CW1 - CW2 - 2, h = 3, outline = true, label = "EXIT",
   color = function() return C.red end,
   id = "exit",
 })
 
+-- Tabs on row 2: MAIN (meteor list + controls), STATS, LOG
+local tab = "main"
+local TABS = {{"main", "MAIN"}, {"stats", "STATS"}, {"log", "LOG"}}
+local function tabRect(i)
+  local x = 2
+  for k = 1, i - 1 do x = x + #TABS[k][2] + 3 end
+  return x, #TABS[i][2] + 2
+end
+
 -- Lights up the touched button for a moment, then runs its action.
 local function handleTouch(x, y)
+  if y == 2 then
+    for i, t in ipairs(TABS) do
+      local tx, tw = tabRect(i)
+      if x >= tx and x < tx + tw and tab ~= t[1] then
+        tab = t[1]
+        return "redraw"
+      end
+    end
+    return
+  end
+  if tab ~= "main" then return end
   if x >= RX + RW - 4 and x <= RX + RW - 2 and y > QUEUE_Y and y <= QUEUE_Y + QUEUE_ROWS then
     local r = y - QUEUE_Y
     local e = queue[r]
@@ -1077,6 +1156,19 @@ local function cardFrame(x, y, w, h, title)
   end
 end
 
+local function drawTabs()
+  put(1, 2, string.rep(CH.h, W), C.line, C.bg)
+  for i, t in ipairs(TABS) do
+    local tx = tabRect(i)
+    local label = " " .. t[2] .. " "
+    if tab == t[1] then
+      put(tx, 2, label, C.bg, C.neon)
+    else
+      put(tx, 2, label, C.dim, C.bg)
+    end
+  end
+end
+
 local function drawStatic()
   gpu.setBackground(C.bg)
   gpu.fill(1, 1, W, H, " ")
@@ -1084,20 +1176,26 @@ local function drawStatic()
   local titleX = math.floor((W - 22) / 2) + 1        -- "METEOR RITUAL by Sixxo" is 22 wide
   put(titleX, 1, "METEOR RITUAL", C.text, C.bg)
   put(titleX + 14, 1, "by Sixxo", C.neon, C.bg)
-  put(1, 2, string.rep(CH.h, W), C.line, C.bg)
-  put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
-  -- left caption
-  -- meteor list card: the column titles sit in its top border, above their columns
-  cardFrame(1, 3, 40, (PER == 3) and (3 * #METEORS + 1) or (PER == 2) and (2 * #METEORS + 2) or (H - 3), "")
-  put(2, 3, " METEOR ", C.text, C.card)
-  put(28, 3, " TIER ", C.text, C.card)
-  put(36, 3, " LP ", C.text, C.card)
-  -- cards
-  cardFrame(RX, STATE_Y, RW, STATE_H, "STATE")
-  cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
-  cardFrame(RX, FLUID_Y, RW, 3, "DRILLING FLUID")
-  cardFrame(RX, QUEUE_Y, RW, CTRL_Y - QUEUE_Y, "QUEUE")
-  for _, b in ipairs(buttons) do drawButton(b) end
+  drawTabs()
+  if tab == "stats" then
+    cardFrame(1, 3, LW, 12, "STATISTICS")
+    cardFrame(RX, 3, RW, 12, "MINED BY TYPE")
+    cardFrame(1, 15, W - 1, H - 16, "MINING TIME PER METEOR")
+  elseif tab == "log" then
+    cardFrame(1, 3, W - 1, H - 4, "EVENT LOG")
+  else
+    -- meteor list card: the column titles sit in its top border, above their columns
+    cardFrame(1, 3, LW, (PER == 3) and (3 * #METEORS + 1) or (PER == 2) and (2 * #METEORS + 2) or (H - 3), "")
+    put(2, 3, " METEOR ", C.text, C.card)
+    put(LW - 12, 3, " TIER ", C.text, C.card)
+    put(LW - 4, 3, " LP ", C.text, C.card)
+    -- cards
+    cardFrame(RX, STATE_Y, RW, STATE_H, "STATE")
+    cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
+    cardFrame(RX, FLUID_Y, RW, 3, "DRILLING FLUID")
+    cardFrame(RX, QUEUE_Y, RW, CTRL_Y - QUEUE_Y, "QUEUE")
+    for _, b in ipairs(buttons) do drawButton(b) end
+  end
   drawnRunning = running
 end
 
@@ -1214,7 +1312,7 @@ local function drawMiners()
       tag, color = "OK", C.green
       nOk = nOk + 1
     end
-    local x, y = RX + 2 + c * 9, MINERS_Y + 1 + r
+    local x, y = RX + 2 + c * math.floor((RW - 2) / 4), MINERS_Y + 1 + r
     put(x, y, m.name, C.text, C.card, 3)
     put(x + 4, y, tag, color, C.card, 3)
   end
@@ -1275,6 +1373,100 @@ local function drawQueue()
   end
 end
 
+-- ---------- STATS tab ----------
+local function fmtDur(sec)
+  sec = math.floor(sec or 0)
+  return string.format("%d:%02d:%02d", math.floor(sec / 3600), math.floor(sec / 60) % 60, sec % 60)
+end
+
+local function fmtMS(sec)
+  sec = math.floor(sec or 0)
+  return string.format("%02d:%02d", math.floor(sec / 60), sec % 60)
+end
+
+local function drawStats()
+  -- left card: numbers
+  local avg = nil
+  if #stats.history > 0 then
+    local sum = 0
+    for _, v in ipairs(stats.history) do sum = sum + v end
+    avg = sum / #stats.history
+  end
+  local up = computer.uptime() - programStart
+  local rows = {
+    {"Meteors mined", tostring(stats.mined), C.text},
+    {"Total mining time", fmtDur(stats.time), C.text},
+    {"Average per meteor", avg and fmtMS(avg) or "-", C.text},
+    {"Fastest / slowest", stats.fastest and (fmtMS(stats.fastest) .. " / " .. fmtMS(stats.slowest)) or "-", C.text},
+    {"LP spent", (stats.lp > 0) and fmtLP(stats.lp) or "0", C.red},
+    {"Program uptime", fmtDur(up), C.text},
+    {"Errors", tostring(stats.errors or 0), (stats.errors or 0) > 0 and C.red or C.green},
+  }
+  for i, r in ipairs(rows) do
+    local y = 3 + i
+    put(3, y, r[1], C.dim, C.card, LW - 4)
+    put(LW - 1 - #r[2], y, r[2], r[3], C.card)
+  end
+  cardTop(1, 3, LW, "STATISTICS", "all time", C.dim)
+  -- right card: count per meteor type
+  local maxC = 1
+  for _, m in ipairs(METEORS) do maxC = math.max(maxC, stats.byType[tostring(m.label)] or 0) end
+  local barX = RX + 20
+  local barW = math.max(3, RW - 20 - 13)
+  cardTop(RX, 3, RW, "MINED BY TYPE", "x   AVG TIME", C.dim)
+  for i, m in ipairs(METEORS) do
+    local y = 3 + i
+    local cnt = stats.byType[tostring(m.label)] or 0
+    put(RX + 2, y, tostring(m.label), C.text, C.card, 17)
+    put(barX, y, string.rep(" ", barW), C.text, C.card)
+    local n = math.floor(cnt / maxC * barW + 0.5)
+    if cnt > 0 and n < 1 then n = 1 end
+    drawThin(barX, y, barW, n / barW, C.neon)
+    put(RX + RW - 12, y, string.format("%3d", cnt), C.text, C.card)
+    local n = stats.typeN[tostring(m.label)] or 0
+    local avgT = n > 0 and fmtMS(stats.typeTime[tostring(m.label)] / n) or "-"
+    put(RX + RW - 7, y, string.rep(" ", 5 - #avgT) .. avgT, C.yellow, C.card)
+  end
+  -- bottom card: mining time of the last meteors, one column each
+  local top, base = 17, H - 5                      -- bars grow upward from the base row
+  local slotW = 5
+  local fit = math.floor((W - 4) / slotW)
+  local first = math.max(1, #stats.history - fit + 1)
+  local shown = #stats.history - first + 1
+  cardTop(1, 15, W - 1, "MINING TIME PER METEOR", shown > 0 and ("last " .. shown) or nil, C.dim)
+  gpu.setBackground(C.card)
+  gpu.fill(2, 16, W - 3, H - 18, " ")
+  if shown <= 0 then
+    put(3, 17, "no meteors mined yet", C.dim, C.card)
+    return
+  end
+  local maxV = 1
+  for i = first, #stats.history do maxV = math.max(maxV, stats.history[i]) end
+  local block = unicode.char(0x2588)
+  local sum = 0
+  for i = first, #stats.history do sum = sum + stats.history[i] end
+  local avgShown = sum / shown
+  for k = 0, shown - 1 do
+    local v = stats.history[first + k]
+    local x = 4 + k * slotW
+    local hgt = math.max(1, math.floor(v / maxV * (base - top + 1) + 0.5))
+    local col = (v > avgShown * 1.25) and C.amber or C.neon
+    for r = 0, hgt - 1 do put(x, base - r, string.rep(block, 3), col, C.card) end
+    put(x, base + 1, string.format("%dm", math.floor(v / 60 + 0.5)), C.dim, C.card, 4)
+  end
+end
+
+-- ---------- LOG tab ----------
+local function drawLog()
+  local rowsN = H - 6
+  for i = 1, rowsN do
+    local e = events[i]
+    local y = 3 + i
+    put(3, y, e and e.t or "", C.dim, C.card, 5)
+    put(10, y, e and e.text or "", e and e.color or C.text, C.card, W - 12)
+  end
+end
+
 -- Last event / touch action: bright for a few seconds after your touch, then dim.
 local function drawMessage()
   local e = events[1]
@@ -1289,16 +1481,22 @@ end
 
 local function drawDynamic()
   drawTitle()
-  drawStatus()
-  drawMiners()
-  drawFluid()
-  drawQueue()
-  drawMessage()
-  -- START / STOP changes color and label, redraw only when it flips
-  if drawnRunning ~= running then
-    drawButton(startBtn)
-    drawnRunning = running
+  if tab == "main" then
+    drawStatus()
+    drawMiners()
+    drawFluid()
+    drawQueue()
+    -- START / STOP changes color and label, redraw only when it flips
+    if drawnRunning ~= running then
+      drawButton(startBtn)
+      drawnRunning = running
+    end
+  elseif tab == "stats" then
+    drawStats()
+  else
+    drawLog()
   end
+  drawMessage()
 end
 
 -- =====================================================================
@@ -1313,7 +1511,9 @@ local function main()
   while true do
     local ev, _, x, y = event.pull(1, "touch")
     if ev then
-      if handleTouch(x, y) == "exit" then return end
+      local res = handleTouch(x, y)
+      if res == "exit" then return end
+      if res == "redraw" then drawStatic() end
       drawDynamic()               -- show the result of the touch right away
     end
     pollHardware(computer.uptime())
