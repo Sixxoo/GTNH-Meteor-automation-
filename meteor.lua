@@ -3,15 +3,14 @@
 --
 -- Summons Blood Magic meteors by dropping catalysts onto the ritual,
 -- switches the GT Ore Drilling Plants on with a one-time redstone pulse,
--- waits until all of them are idle, optionally runs an Ender Quarry to
--- clear the leftover filler blocks, then moves on to the next meteor.
+-- waits until all of them are idle, then moves on to the next meteor.
 --
 -- Hardware: Tier 2+ screen and GPU (80x25), transposer, Redstone I/O
 -- (or Redstone Card), adapters next to the miner controllers and next to
 -- an ME controller / ME interface.
 --
 -- Flow per meteor:
---   idle -> [ritual] -> wait_start -> mining -> [quarry] -> finish -> idle
+--   idle -> [ritual] -> wait_start -> mining -> finish -> idle
 --   ("ritual" = ritual start pulse, sent RITUAL_DELAY seconds after the first catalyst drop)
 -- =====================================================================
 
@@ -29,7 +28,7 @@ local tp  = component.transposer
 -- overwrites them. Put meteor_config.lua next to the program (e.g. /home/meteor_config.lua).
 -- It must return a table with the settings below, for example:
 --     local sides = require("sides")
---     return {QUARRY_TIME = 90, METEORS = {...}}
+--     return {IDLE_CONFIRM = 5, METEORS = {...}}
 -- Anything not set there uses the defaults in this file.
 -- ---------------------------------------------------------------------
 local USER = {}
@@ -78,7 +77,6 @@ local OUT = cfg("OUT", {
   dropper = {addr = "c6352", side = sides.east},   -- fires the dropper (Redstone I/O c6352, dropper to the east)
   ritual  = {addr = "b8a3b", side = sides.south},   -- one-time start pulse for the ritual (Dynamism Tablet, Redstone I/O b8a3b)
   miners  = {addr = "e676d", side = sides.north},   -- one-time start pulse for the GT miners (Redstone I/O e676d)
-  quarry  = {side = sides.north},   -- starts the Ender Quarry
 })
 
 -- ---- Component addresses (the first few characters are enough) ----
@@ -108,19 +106,18 @@ local FLUID_BAR_MAX = cfg("FLUID_BAR_MAX", 100000000)     -- mB shown as a full 
 --           (check with tp.getStackInSlot(sides.up, slot).name)
 -- short:    optional shorter catalyst text for the screen (max 24 characters)
 -- tier, lp: shown on the button (machine tier and Life Point cost, information only)
--- quarry:   true if the meteor has filler blocks for the Ender Quarry
 -- A meteor whose label is still "Meteor N" or "Slot N" counts as not set up and cannot be queued.
 local METEORS = cfg("METEORS", {
-  {label = "Overworld",            catalyst = "Field Generator (LV)",            tier = "LV",  lp = 600000,    quarry = false},
-  {label = "Nether",               catalyst = "Advanced Replicator",             tier = "MV",  lp = 1200000,   quarry = false},
-  {label = "Platinum",             catalyst = "Advanced Scanner IV",             tier = "IV",  lp = 12500000,  quarry = false},
-  {label = "BartWorks",            catalyst = "Elite Packager",                  tier = "LuV", lp = 10000000,  quarry = false},
-  {label = "Naquadah",             catalyst = "Crystal Mainframe",               tier = "ZPM", lp = 25000000,  quarry = false},
-  {label = "Samarium",             catalyst = "Elite Circuit Assembler II", short = "Elite Circuit Assem. II", tier = "ZPM", lp = 80000000,  quarry = false},
-  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", short = "Bloody Ichorium Fusion", tier = "ZPM", lp = 90000000,  quarry = false},
-  {label = "Samarium+Neutron.",    catalyst = "Elite Mass Fabricator II", short = "Elite Mass Fabric. II",        tier = "ZPM", lp = 100000000, quarry = false},
-  {label = "Indium",               catalyst = "Wetware Supercomputer",           tier = "UV",  lp = 50000000,  quarry = false},
-  {label = "SpNt+FluxElectrum",    catalyst = "Ultimate Botanical Architect", short = "Ult. Botanical Archit.", tier = "UV",  lp = 125000000, quarry = false},
+  {label = "Overworld",            catalyst = "Field Generator (LV)",            tier = "LV",  lp = 600000},
+  {label = "Nether",               catalyst = "Advanced Replicator",             tier = "MV",  lp = 1200000},
+  {label = "Platinum",             catalyst = "Advanced Scanner IV",             tier = "IV",  lp = 12500000},
+  {label = "BartWorks",            catalyst = "Elite Packager",                  tier = "LuV", lp = 10000000},
+  {label = "Naquadah",             catalyst = "Crystal Mainframe",               tier = "ZPM", lp = 25000000},
+  {label = "Samarium",             catalyst = "Elite Circuit Assembler II", short = "Elite Circuit Assem. II", tier = "ZPM", lp = 80000000},
+  {label = "Gems",                 catalyst = "Bloody Ichorium Fusion Crafting", short = "Bloody Ichorium Fusion", tier = "ZPM", lp = 90000000},
+  {label = "Samarium+Neutron.",    catalyst = "Elite Mass Fabricator II", short = "Elite Mass Fabric. II",        tier = "ZPM", lp = 100000000},
+  {label = "Indium",               catalyst = "Wetware Supercomputer",           tier = "UV",  lp = 50000000},
+  {label = "SpNt+FluxElectrum",    catalyst = "Ultimate Botanical Architect", short = "Ult. Botanical Archit.", tier = "UV",  lp = 125000000},
 })
 
 -- ---- Crafting the catalysts in the ME system ----
@@ -136,7 +133,6 @@ local CRAFT_RETRY = cfg("CRAFT_RETRY", 10)        -- seconds before a failed or 
 local START_DELAY = cfg("START_DELAY", 3)     -- seconds after the ritual start (RITUAL_DELAY after the drop) before the miners' start pulse
 local START_TIMEOUT = cfg("START_TIMEOUT", 180)   -- how long to wait for the miners to start
 local IDLE_CONFIRM = cfg("IDLE_CONFIRM", 3)    -- how long ALL miners must be OFF to count the meteor as mined
-local QUARRY_TIME = cfg("QUARRY_TIME", 120)   -- how long the Ender Quarry gets to finish
 local MINERS_PULSE = cfg("MINERS_PULSE", 1.0)   -- length of the miners' start pulse
 local MINER_START_GRACE = cfg("MINER_START_GRACE", 15)  -- a miner still idle this long after the start pulse is shown as OFF (problem)
 
@@ -151,12 +147,6 @@ local RITUAL_EACH_METEOR = cfg("RITUAL_EACH_METEOR", false)  -- true: send the p
 -- nil: fit the screen's shape automatically (uses extra rows for spacing).
 -- Or set it by hand, e.g. {80, 50}. The layout is designed for 80 columns.
 local RESOLUTION = cfg("RESOLUTION", {80, 35})
-
--- ---- Ender Quarry signal ----
--- "pulse": one short pulse starts it, then we just wait QUARRY_TIME
--- "hold":  signal stays on for QUARRY_TIME, then goes off
-local QUARRY_SIGNAL = cfg("QUARRY_SIGNAL", "pulse")
-local QUARRY_PULSE = cfg("QUARRY_PULSE", 1.0)   -- length of the pulse in "pulse" mode
 
 -- ---- Miners switched off by your own shutdown method ----
 -- true: miners disabled via machine controller cover / soft mallet count as OFF.
@@ -231,14 +221,13 @@ end
 
 local queue = {}              -- indexes into METEORS, in summoning order
 local running = false         -- START / STOP switch
-local state = "idle"          -- idle | ritual | wait_start | mining | quarry | finish
+local state = "idle"          -- idle | ritual | wait_start | mining | finish
 local stateSince = 0          -- uptime when the current state began
 local status = "Ready"        -- one-line message shown on screen
 local retryAt = 0             -- idle: do not retry the catalyst drop before this time
 local pulsed = false          -- miners' start pulse already sent for this meteor
 local pulseAt = nil           -- uptime of that pulse
 local finishedAt = nil        -- uptime when the last meteor was fully mined
-local curHasQuarry = nil      -- does the meteor being processed have a filler step
 local curLabel = nil           -- name of the meteor being processed (shown in the STATE card)
 local summonDone = false      -- the summoning part (catalyst drop + ritual start) is finished
 local minersStartedAt = nil   -- uptime when the miners were first seen running
@@ -304,7 +293,6 @@ local STATE_LABEL = {
   ritual     = "Starting ritual",
   wait_start = "Waiting for miners to start",
   mining     = "Mining meteor",
-  quarry     = "Ender Quarry is clearing filler",
   finish     = "Finishing",
 }
 
@@ -624,18 +612,6 @@ local function returnCatalyst(entry)
   end
 end
 
-local function startQuarry()
-  if QUARRY_SIGNAL == "hold" then
-    setOut("quarry", 15)
-  else
-    pulseOut("quarry", QUARRY_PULSE)
-  end
-end
-
-local function stopQuarry()
-  if QUARRY_SIGNAL == "hold" then setOut("quarry", 0) end
-end
-
 -- =====================================================================
 -- STATE MACHINE (one function per state)
 -- =====================================================================
@@ -658,7 +634,6 @@ local function summon(now)
   ritualPending = RITUAL_EACH_METEOR or not ritualStarted
   summonDone = false
   minersStartedAt = nil
-  curHasQuarry = METEORS[queue[1].m].quarry and true or false
   curLabel = METEORS[queue[1].m].label
   for _, m in ipairs(MINERS) do m.worked = false; m.failed = false end
   setState("wait_start", "Meteor summoned, starting miners soon")
@@ -760,22 +735,6 @@ local function stepMining(now)
   end
 
   -- every miner has been idle long enough: the meteor itself is mined
-  if METEORS[queue[1].m].quarry then
-    startQuarry()
-    setState("quarry", "Ender Quarry started")
-  else
-    setState("finish")
-  end
-end
-
-local function stepQuarry(now)
-  local left = QUARRY_TIME - elapsed(now)
-  if left > 0 then
-    status = "Ender Quarry running (" .. math.ceil(left) .. " s)"
-    progress = 1 - left / QUARRY_TIME
-    return
-  end
-  stopQuarry()
   setState("finish")
 end
 
@@ -790,7 +749,6 @@ local STEPS = {
   idle       = stepIdle,
   wait_start = stepWaitStart,
   mining     = stepMining,
-  quarry     = stepQuarry,
   finish     = stepFinish,
 }
 
@@ -832,7 +790,7 @@ local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
 local PER = (H >= 33) and 3 or (H >= 30) and 2 or math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
 local STATE_Y = 3
-local STATE_H = (H >= 30) and 10 or 7            -- tall STATE card: 4 framed phases (2 rows each) + status line; compact: 1 row per phase
+local STATE_H = (H >= 30) and 8 or 6            -- tall STATE card: 3 framed phases (2 rows each) + status line; compact: 1 row per phase
 local MINERS_Y = STATE_Y + STATE_H              -- miners card: 6 rows
 local FLUID_Y = MINERS_Y + 6                    -- fluid card: 3 rows
 local QUEUE_Y = FLUID_Y + 3                     -- queue card: down to CTRL_Y-1; the controls sit below it
@@ -875,12 +833,12 @@ local C = {
 
 local STATE_BIG = {
   idle = "IDLE", ritual = "RITUAL", wait_start = "STARTING",
-  mining = "MINING", quarry = "QUARRY", finish = "FINISH",
+  mining = "MINING", finish = "FINISH",
 }
 
 local STATE_COLOR = {
   idle = 0xB0BCCB, ritual = 0xFF2A3D, wait_start = 0xFFB020,
-  mining = 0x00B4FF, quarry = 0xFF2A3D, finish = 0x2BE05A,
+  mining = 0x00B4FF, finish = 0x2BE05A,
 }
 
 local function spaced(text)
@@ -1013,7 +971,7 @@ for i = 1, #METEORS do
     label = lbl,
     info = ready and {
       name = lbl, catalyst = tostring(m.short or m.catalyst), tier = m.tier,
-      lp = fmtLP(m.lp), filler = m.quarry,
+      lp = fmtLP(m.lp),
     } or nil,
     stripe = function()
       if not ready then return C.track end
@@ -1150,21 +1108,19 @@ local function drawTitle()
   put(W - #label - 1, 1, label, color, C.bg)
 end
 
--- Stage of the current meteor: 0 none, 1 preparing (catalyst), 2 summoning, 3 GT miners, 4 fillers
--- (Ender Quarry), 5 everything done (kept until the next meteor starts).
+-- Stage of the current meteor: 0 none, 1 preparing (catalyst), 2 summoning, 3 GT miners, 4 everything done (kept until the next meteor starts).
 local function currentPhase()
   if state == "wait_start" then return summonDone and 3 or 2 end
   if state == "mining" then return 3 end
-  if state == "quarry" then return 4 end
-  if state == "finish" then return 5 end
-  if finishedAt and computer.uptime() - finishedAt < 8 then return 5 end
+  if state == "finish" then return 4 end
+  if finishedAt and computer.uptime() - finishedAt < 8 then return 4 end
   if running and queue[1] and queue[1].loc ~= "fired" then return 1 end
-  return finishedAt and 5 or 0          -- stays "done" until the next meteor starts
+  return finishedAt and 4 or 0          -- stays "done" until the next meteor starts
 end
 
-local PHASE_TITLE = {"PREPARING", "SUMMON", "GT MINERS", "FILLERS"}
+local PHASE_TITLE = {"PREPARING", "SUMMON", "GT MINERS"}
 
--- Text and color of phase k (1-4) while the meteor is in the given stage.
+-- Text and color of phase k (1-3) while the meteor is in the given stage.
 local function phaseText(k, stage)
   local dim, active, done = C.dim, C.yellow, C.green
   if k == 1 then
@@ -1188,15 +1144,10 @@ local function phaseText(k, stage)
     end
     return "done", done
   end
-  local hasQuarry = curHasQuarry
-  if stage == 1 and queue[1] then hasQuarry = METEORS[queue[1].m].quarry and true or false end
-  if stage >= 2 and hasQuarry == false then return "no fillers", dim end
-  if stage < 4 then return "-", dim end
-  if stage == 4 then return "clearing area", active end
-  return "area clear", done
+  return "-", dim
 end
 
--- The four phases of the current meteor, all shown at once.
+-- The three phases of the current meteor, all shown at once.
 local function drawStatus()
   local stage = currentPhase()
   local who, whoColor = "READY", C.green
@@ -1205,9 +1156,9 @@ local function drawStatus()
     if stage == 1 and queue[1] then who = METEORS[queue[1].m].label end
     whoColor = C.neon
   end
-  local tall = STATE_H >= 10
+  local tall = H >= 30
   if not tall then cardTop(RX, STATE_Y, RW, "STATE", who, whoColor) end
-  for k = 1, 4 do
+  for k = 1, 3 do
     local text, col = phaseText(k, stage)
     local titleColor = C.text
     if tall then
@@ -1304,7 +1255,6 @@ local function drawQueue()
       local mt = METEORS[e.m]
       local active = e.loc == "fired"
       line = string.format("%s%2d  %s", active and ">" or " ", r, mt.label)
-      if mt.quarry then fg = 0xFF7A86 end
       if active then
         tag, tagColor, fg = "ACTIVE", C.neon, C.neon
       elseif e.loc == "dropper" then
