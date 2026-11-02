@@ -872,7 +872,7 @@ local CH = {
 local C = {
   bg = 0x03050A, card = 0x090C14, face = 0x0B0F18,
   neon = 0x00B4FF, red = 0xFF2A3D, green = 0x2BE05A, amber = 0xFFB020, yellow = 0xFFE14D,
-  text = 0xFFFFFF, dim = 0x6B7A8F, track = 0x1E2C40, line = 0x14507A,
+  text = 0xFFFFFF, dim = 0xB9C7DB, sub = 0xA9D4FF, na = 0x6B7A8F, track = 0x1E2C40, line = 0x14507A,
 }
 
 local STATE_BIG = {
@@ -948,17 +948,17 @@ local function drawButton(b, pressed)
     local cTier = pressed and C.bg or (TIER_COLOR[inf.tier] or C.dim)
     local cDim = pressed and C.bg or C.dim
     local cLP = pressed and C.bg or C.red
-    local cLight = pressed and C.bg or (inf.filler and C.green or C.red)
+    local cLight = pressed and C.bg or C.green
     -- columns (b.x+1 = first text column): name / catalyst 24 wide, tier +25, LP cost +30, filler light +36
     local y0 = b.y
     put(b.x + 1, y0, nm, fg, bg, 24)
     put(b.x + 25, y0, inf.tier or "", cTier, bg, 3)
     put(b.x + 30, y0, inf.lp or "", cLP, bg, 5)
-    put(b.x + 36, y0, CH.dot, cLight, bg)
+    if inf.filler then put(b.x + 36, y0, CH.dot, cLight, bg) end
     if faceH >= 2 then
       local cat = inf.catalyst
       if unicode.len(cat) > 24 then cat = unicode.sub(cat, 1, 23) .. "." end
-      put(b.x + 1, y0 + 1, cat, cDim, bg, 24)
+      put(b.x + 1, y0 + 1, cat, pressed and C.bg or C.sub, bg, 24)
       put(b.x + 25, y0 + 1, string.rep(" ", 13), fg, bg)
     end
     return
@@ -1198,7 +1198,7 @@ local function drawStatus()
   if not tall then cardTop(RX, STATE_Y, RW, "STATE", who, whoColor) end
   for k = 1, 4 do
     local text, col = phaseText(k, stage)
-    local titleColor = (stage >= k) and C.text or C.dim
+    local titleColor = C.text
     if tall then
       -- every phase has its own blue-framed header line; the first one is the top edge of the card
       local y = STATE_Y + (k - 1) * 2
@@ -1241,7 +1241,7 @@ local function drawMiners()
     -- grey   N/A = miner does not answer
     local tag, color
     if m.active == nil then
-      tag, color = "N/A", C.dim
+      tag, color = "N/A", C.na
     elseif m.active then
       tag, color = "ON", C.yellow
       nOn = nOn + 1
