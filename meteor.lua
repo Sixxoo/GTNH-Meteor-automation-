@@ -241,6 +241,9 @@ local pulsed = false          -- miners' start pulse already sent for this meteo
 local pulseAt = nil           -- uptime of that pulse
 local finishedAt = nil        -- uptime when the last meteor was fully mined
 local curHasQuarry = nil      -- does the meteor being processed have a filler step
+local curLabel = nil           -- name of the meteor being processed (shown in the STATE card)
+local summonDone = false      -- the summoning part (catalyst drop + ritual start) is finished
+local minersStartedAt = nil   -- uptime when the miners were first seen running
 local ritualStarted = false   -- ritual start pulse already sent (once per program run)
 local ritualPending = false   -- catalyst dropped, ritual start pulse still to be sent
 local idleSince = nil         -- uptime since when all miners have been OFF
@@ -655,7 +658,10 @@ local function summon(now)
   pulseAt = nil
   finishedAt = nil
   ritualPending = RITUAL_EACH_METEOR or not ritualStarted
+  summonDone = false
+  minersStartedAt = nil
   curHasQuarry = METEORS[queue[1].m].quarry and true or false
+  curLabel = METEORS[queue[1].m].label
   for _, m in ipairs(MINERS) do m.worked = false; m.failed = false end
   setState("wait_start", "Meteor summoned, starting miners soon")
   return true
@@ -696,12 +702,16 @@ local function stepWaitStart(now)
     pulseOut("ritual", RITUAL_PULSE)
     ritualStarted = true
     ritualPending = false
+    summonDone = true
     status = "Ritual start signal sent"
     logEvent("Ritual start signal sent", 0x9FD8FF)
     return
   end
+  if not summonDone and elapsed(now) >= RITUAL_DELAY then summonDone = true end
   if anyActive() then
     idleSince = nil
+    summonDone = true
+    minersStartedAt = computer.uptime()
     setState("mining", "Mining in progress")
   elseif not pulsed and elapsed(now) >= RITUAL_DELAY + START_DELAY then
     -- sent only while no miner runs, so a toggle (T flip-flop) cannot switch them off
@@ -823,8 +833,11 @@ local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
 local PER = math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
-local STATE_Y, MINERS_Y, FLUID_Y = 3, 8, 14     -- card tops (state 3-7, miners 8-13, fluid 14-16)
-local QUEUE_Y = 17                             -- queue card: rows 17 .. CTRL_Y-1; the controls sit below it
+local STATE_Y = 3
+local STATE_H = (H >= 30) and 11 or 7            -- tall STATE card: 4 phases x 2 rows + status line; compact: 1 row per phase
+local MINERS_Y = STATE_Y + STATE_H              -- miners card: 6 rows
+local FLUID_Y = MINERS_Y + 6                    -- fluid card: 3 rows
+local QUEUE_Y = FLUID_Y + 3                     -- queue card: down to CTRL_Y-1; the controls sit below it
 local QUEUE_ROWS = CTRL_Y - QUEUE_Y - 2         -- content rows of the queue card (rows QUEUE_Y+1 .. CTRL_Y-2)
 
 local function put(x, y, text, fg, bg, width)
@@ -1110,7 +1123,7 @@ local function drawStatic()
   put(31, 3, " LP ", C.text, C.card)
   put(35, 3, " FILL", C.text, C.card)
   -- cards
-  cardFrame(RX, STATE_Y, RW, 5, "STATE")
+  cardFrame(RX, STATE_Y, RW, STATE_H, "STATE")
   cardFrame(RX, MINERS_Y, RW, 6, "GT MINERS")
   cardFrame(RX, FLUID_Y, RW, 3, "DRILLING FLUID")
   cardFrame(RX, QUEUE_Y, RW, CTRL_Y - QUEUE_Y, "QUEUE")
@@ -1125,46 +1138,86 @@ local function drawTitle()
   put(W - #label - 1, 1, label, color, C.bg)
 end
 
--- Phase of the current meteor: 0 none, 1 summoning, 2 GT miners, 3 filler blocks (Ender Quarry),
--- 4 finishing, 5 meteor mined (kept until the next meteor starts).
+-- Stage of the current meteor: 0 none, 1 preparing (catalyst), 2 summoning, 3 GT miners, 4 fillers
+-- (Ender Quarry), 5 everything done (kept until the next meteor starts).
 local function currentPhase()
-  if state == "wait_start" and ritualPending then return 1 end
-  if state == "wait_start" or state == "mining" then return 2 end
-  if state == "quarry" then return 3 end
-  if state == "finish" then return 4 end
+  if state == "wait_start" then return summonDone and 3 or 2 end
+  if state == "mining" then return 3 end
+  if state == "quarry" then return 4 end
+  if state == "finish" then return 5 end
   if finishedAt and computer.uptime() - finishedAt < 8 then return 5 end
   if running and queue[1] and queue[1].loc ~= "fired" then return 1 end
-  return finishedAt and 5 or 0          -- stays on "Meteor mined" until the next meteor starts
+  return finishedAt and 5 or 0          -- stays "done" until the next meteor starts
 end
 
-local PHASE_NAMES = {"Summoning meteor", "Mining - GT Miners", "Mining filler blocks", "Meteor mined"}
+local PHASE_TITLE = {"PREPARING", "SUMMON", "GT MINERS", "FILLERS"}
 
-local PHASE_COLOR = {C.neon, C.yellow, 0xB07CFF, C.green}
+-- Text and color of phase k (1-4) while the meteor is in the given stage.
+local function phaseText(k, stage)
+  local dim, active, done = C.dim, C.yellow, C.green
+  if k == 1 then
+    if stage == 0 then return "-", dim end
+    if stage == 1 then
+      local head = queue[1]
+      if head and head.loc == "crafting" then return "crafting catalyst", C.amber end
+    end
+    return "catalyst in stock", done
+  elseif k == 2 then
+    if stage < 2 then return "-", dim end
+    if stage == 2 then return "summoning...", active end
+    return "done", done
+  elseif k == 3 then
+    if stage < 3 then return "-", dim end
+    if stage == 3 then
+      if state ~= "mining" then return "starting miners", active end
+      if minersStartedAt and computer.uptime() - minersStartedAt < 8 then return "deploying pipe", active end
+      return "mining", active
+    end
+    return "done", done
+  end
+  local hasQuarry = curHasQuarry
+  if stage == 1 and queue[1] then hasQuarry = METEORS[queue[1].m].quarry and true or false end
+  if stage >= 2 and hasQuarry == false then return "no fillers", dim end
+  if stage < 4 then return "-", dim end
+  if stage == 4 then return "clearing area", active end
+  return "area clear", done
+end
 
--- Shows only the phase that is running now (phase 5 = the meteor is mined).
+-- The four phases of the current meteor, all shown at once.
 local function drawStatus()
-  local phase = currentPhase()
-  if phase == 5 then phase = 4 end
-  put(RX + 2, STATE_Y + 1, "PHASE " .. phase .. "/4  ", C.dim, C.card, 10)
-  if phase == 0 then
-    put(RX + 12, STATE_Y + 1, "Ready to summon Meteor", C.text, C.card, RW - 14)
-  else
-    put(RX + 12, STATE_Y + 1, PHASE_NAMES[phase], PHASE_COLOR[phase], C.card, RW - 14)
+  local stage = currentPhase()
+  local who, whoColor = "READY", C.green
+  if stage >= 1 then
+    who = curLabel or ""
+    if stage == 1 and queue[1] then who = METEORS[queue[1].m].label end
+    whoColor = C.neon
+  end
+  cardTop(RX, STATE_Y, RW, "STATE", who, whoColor)
+  local tall = STATE_H >= 11
+  for k = 1, 4 do
+    local text, col = phaseText(k, stage)
+    local titleColor = (stage >= k) and C.text or C.dim
+    if tall then
+      local y = STATE_Y + 1 + (k - 1) * 2
+      put(RX + 2, y, "PHASE " .. k, C.dim, C.card, 8)
+      put(RX + 10, y, PHASE_TITLE[k], titleColor, C.card, RW - 12)
+      put(RX + 4, y + 1, text, col, C.card, RW - 6)
+    else
+      local y = STATE_Y + k
+      put(RX + 2, y, k .. " " .. PHASE_TITLE[k], titleColor, C.card, 12)
+      put(RX + 15, y, text, col, C.card, RW - 17)
+    end
   end
 
+  -- last row of the card: warnings and details that are not part of the phases
   local bad = false
   local low = status:lower()
   for _, w in ipairs({"timeout", "unreachable", "missing", "disabled", "low ", "failed", "waiting for fluid", "not in interface", "no me pattern", "canceled", "rejected"}) do
     if low:find(w, 1, true) then bad = true end
   end
-  if phase == 0 and (status == "Ready" or status == "Queue is empty") then
-    put(RX + 2, STATE_Y + 2, "", C.text, C.card, RW - 4)
-  else
-    put(RX + 2, STATE_Y + 2, status, bad and C.amber or C.text, C.card, RW - 4)
-  end
-
-  drawThin(RX + 2, STATE_Y + 3, 29, progress or 0, C.neon)
-  put(RX + 32, STATE_Y + 3, progress and string.format(" %3d%%", math.floor(progress * 100)) or "    -", C.dim, C.card, 5)
+  local shown = status
+  if status == "Ready" or status == "Queue is empty" or status == "Mining in progress" then shown = "" end
+  put(RX + 2, STATE_Y + STATE_H - 2, shown, bad and C.amber or C.dim, C.card, RW - 4)
 end
 
 -- miners: 4 x 4 neon status lights, numbered down each column (M01-M04, M05-M08, ...)
