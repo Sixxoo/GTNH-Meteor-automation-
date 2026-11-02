@@ -834,7 +834,7 @@ local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
 local PER = math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
 local STATE_Y = 3
-local STATE_H = (H >= 30) and 11 or 7            -- tall STATE card: 4 phases x 2 rows + status line; compact: 1 row per phase
+local STATE_H = (H >= 30) and 10 or 7            -- tall STATE card: 4 framed phases (2 rows each) + status line; compact: 1 row per phase
 local MINERS_Y = STATE_Y + STATE_H              -- miners card: 6 rows
 local FLUID_Y = MINERS_Y + 6                    -- fluid card: 3 rows
 local QUEUE_Y = FLUID_Y + 3                     -- queue card: down to CTRL_Y-1; the controls sit below it
@@ -864,6 +864,7 @@ local CH = {
   bl = unicode.char(0x2514), br = unicode.char(0x2518),
   h  = unicode.char(0x2500), v  = unicode.char(0x2502),
   hh = unicode.char(0x2501), vv = unicode.char(0x2503),
+  lt = unicode.char(0x251C), rt = unicode.char(0x2524),
   dot = unicode.char(0x25CF), ring = unicode.char(0x25CB), check = unicode.char(0x2713),
 }
 
@@ -1160,8 +1161,9 @@ local function phaseText(k, stage)
     if stage == 1 then
       local head = queue[1]
       if head and head.loc == "crafting" then return "crafting catalyst", C.amber end
+      return "catalyst in stock", done
     end
-    return "catalyst in stock", done
+    return "done", done
   elseif k == 2 then
     if stage < 2 then return "-", dim end
     if stage == 2 then return "summoning...", active end
@@ -1192,16 +1194,23 @@ local function drawStatus()
     if stage == 1 and queue[1] then who = METEORS[queue[1].m].label end
     whoColor = C.neon
   end
-  cardTop(RX, STATE_Y, RW, "STATE", who, whoColor)
-  local tall = STATE_H >= 11
+  local tall = STATE_H >= 10
+  if not tall then cardTop(RX, STATE_Y, RW, "STATE", who, whoColor) end
   for k = 1, 4 do
     local text, col = phaseText(k, stage)
     local titleColor = (stage >= k) and C.text or C.dim
     if tall then
-      local y = STATE_Y + 1 + (k - 1) * 2
-      put(RX + 2, y, "PHASE " .. k, C.dim, C.card, 8)
-      put(RX + 10, y, PHASE_TITLE[k], titleColor, C.card, RW - 12)
-      put(RX + 4, y + 1, text, col, C.card, RW - 6)
+      -- every phase has its own blue-framed header line; the first one is the top edge of the card
+      local y = STATE_Y + (k - 1) * 2
+      local first = (k == 1)
+      put(RX, y, (first and CH.tl or CH.lt) .. string.rep(CH.h, RW - 2) .. (first and CH.tr or CH.rt), C.neon, C.card)
+      if first then put(RX, y, CH.tl, C.red, C.card) end
+      put(RX + 2, y, " PHASE " .. k .. "  " .. PHASE_TITLE[k] .. " ", titleColor, C.card)
+      if first then
+        local t = " " .. who .. " "
+        put(RX + RW - 2 - unicode.len(t), y, t, whoColor, C.card)
+      end
+      put(RX + 2, y + 1, text, col, C.card, RW - 4)
     else
       local y = STATE_Y + k
       put(RX + 2, y, k .. " " .. PHASE_TITLE[k], titleColor, C.card, 12)
