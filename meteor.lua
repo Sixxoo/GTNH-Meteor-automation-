@@ -832,7 +832,7 @@ end
 local W, H = fitResolution()
 local RX, RW = 42, 38                          -- right column (cards)
 local CTRL_Y = H - 3                           -- controls: rows H-3 .. H-1 (same bottom as the queue card)
-local PER = math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
+local PER = (H >= 30) and 2 or math.max(1, math.floor((H - 5) / 12))   -- screen rows per meteor in the list card (12 meteors, rows 4 .. H-2)
 local STATE_Y = 3
 local STATE_H = (H >= 30) and 10 or 7            -- tall STATE card: 4 framed phases (2 rows each) + status line; compact: 1 row per phase
 local MINERS_Y = STATE_Y + STATE_H              -- miners card: 6 rows
@@ -955,11 +955,14 @@ local function drawButton(b, pressed)
     put(b.x + 25, y0, inf.tier or "", cTier, bg, 3)
     put(b.x + 30, y0, inf.lp or "", cLP, bg, 5)
     if inf.filler then put(b.x + 36, y0, CH.dot, cLight, bg) end
-    if faceH >= 2 then
-      local cat = inf.catalyst
-      if unicode.len(cat) > 24 then cat = unicode.sub(cat, 1, 23) .. "." end
-      put(b.x + 1, y0 + 1, cat, pressed and C.bg or C.sub, bg, 24)
-      put(b.x + 25, y0 + 1, string.rep(" ", 13), fg, bg)
+    if b.h >= 2 then
+      -- blue separator under the meteor, the catalyst name sits in it like a title
+      local lc, rc = CH.lt, CH.rt
+      if inf.last then lc, rc = CH.bl, CH.br end
+      put(b.x - 1, y0 + 1, lc .. string.rep(CH.h, b.w) .. rc, C.neon, C.card)
+      local cat = " " .. inf.catalyst .. " "
+      if unicode.len(cat) > b.w - 4 then cat = unicode.sub(cat, 1, b.w - 5) .. ". " end
+      put(b.x + 1, y0 + 1, cat, C.sub, C.card)
     end
     return
   end
@@ -1006,11 +1009,11 @@ for i = 1, #METEORS do
   local lbl = tostring(m.label)
   local ready = m.catalyst and m.catalyst ~= "" and not lbl:match("^Meteor %d+$") and not lbl:match("^[Ss]lot %d+$")
   addButton({
-    x = 2, y = 4 + (i - 1) * PER, w = 38, h = PER, faceH = (PER >= 3) and (PER - 1) or PER, gapBg = C.card, noStripe = true,
+    x = 2, y = 4 + (i - 1) * PER, w = 38, h = PER, faceH = 1, gapBg = C.card, noStripe = true,
     empty = not ready, alt = (i % 2 == 0),
     label = lbl,
     info = ready and {
-      name = lbl, catalyst = tostring(m.short or m.catalyst), tier = m.tier,
+      name = lbl, catalyst = tostring(m.catalyst), last = (i == #METEORS), tier = m.tier,
       lp = fmtLP(m.lp), filler = m.quarry,
     } or nil,
     stripe = function()
@@ -1118,7 +1121,7 @@ local function drawStatic()
   put(1, 2, string.rep(CH.hh, 12), C.red, C.bg)
   -- left caption
   -- meteor list card: the column titles sit in its top border, above their columns
-  cardFrame(1, 3, 40, H - 3, "")
+  cardFrame(1, 3, 40, (PER == 2) and 25 or (H - 3), "")
   put(2, 3, " METEOR ", C.text, C.card)
   put(26, 3, " TIER ", C.text, C.card)
   put(31, 3, " LP ", C.text, C.card)
