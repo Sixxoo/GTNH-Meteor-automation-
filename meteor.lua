@@ -75,7 +75,7 @@ local DROPPER_SIDE = cfg("DROPPER_SIDE", sides.down)     -- dropper (below the t
 --       Leave it out to use the computer's default redstone component.
 local OUT = cfg("OUT", {
   dropper = {addr = "c6352", side = sides.east},   -- fires the dropper (Redstone I/O c6352, dropper to the east)
-  ritual  = {addr = "b8a3b", side = sides.south},   -- one-time start pulse for the ritual (Dynamism Tablet, Redstone I/O b8a3b)
+  ritual  = {addr = "b8a3", side = sides.south},   -- one-time start pulse for the ritual (Dynamism Tablet, Redstone I/O b8a3)
   miners  = {addr = "e676d", side = sides.north},   -- one-time start pulse for the GT miners (Redstone I/O e676d)
 })
 
@@ -205,8 +205,15 @@ local function setOut(name, level)
   OUT[name].proxy.setOutput(OUT[name].side, level)
 end
 
+local pulseWarnings = {}          -- read-back problems found by pulseOut (shown in the event log)
+
 local function pulseOut(name, seconds)
   setOut(name, 15)
+  -- read the output back: a Redstone I/O that does not hold 15 on that side is the wrong block / side
+  local okR, got = pcall(function() return OUT[name].proxy.getOutput(OUT[name].side) end)
+  if okR and type(got) == "number" and got < 15 then
+    pulseWarnings[#pulseWarnings + 1] = name .. ": output set to 15 but reads " .. got
+  end
   os.sleep(seconds)
   setOut(name, 0)
 end
@@ -661,10 +668,11 @@ local function dropCatalyst(entry)
   end
   os.sleep(0.2)
   pulseOut("dropper", 0.3)
-  os.sleep(0.6)
+  os.sleep(0.3)
   -- the catalyst must be gone after the pulse, otherwise the dropper did not fire
   if catalystInDropper(entry) then
-    return false, "Dropper did not fire"
+    os.sleep(0.5)                       -- slow dropper: look once more
+    if catalystInDropper(entry) then return false, "Dropper did not fire" end
   end
   entry.loc = "fired"
   return true
@@ -1523,6 +1531,12 @@ end
 local function main()
   resetOutputs()
   logEvent(CONFIG_NOTE, 0x7FD1FF)
+  for _, name in ipairs({"dropper", "ritual", "miners"}) do
+    local o = OUT[name]
+    if o and o.proxy then
+      logEvent(name .. " -> Redstone " .. tostring(o.proxy.address):sub(1, 8) .. " side " .. tostring(sides[o.side] or o.side), 0x7FD1FF)
+    end
+  end
   gpu.setResolution(W, H)
   drawStatic()
   while true do
@@ -1535,6 +1549,7 @@ local function main()
     end
     pollHardware(computer.uptime())
     if running then step() end
+    while #pulseWarnings > 0 do logEvent(table.remove(pulseWarnings, 1), 0xFFAA33) end
     updateCrafts(computer.uptime())
     refillDropper()
     drawDynamic()
