@@ -130,7 +130,7 @@ local CRAFT_MISSING = cfg("CRAFT_MISSING", true)      -- false: a missing cataly
 local CRAFT_RETRY = cfg("CRAFT_RETRY", 10)        -- seconds before a failed or canceled craft is requested again
 
 -- ---- Timing (seconds) ----
-local START_DELAY = cfg("START_DELAY", 3)     -- seconds after the ritual start (RITUAL_DELAY after the drop) before the miners' start pulse
+local START_DELAY = cfg("START_DELAY", 8)     -- seconds after the ritual start (RITUAL_DELAY after the drop) before the miners' start pulse
 local START_TIMEOUT = cfg("START_TIMEOUT", 180)   -- how long to wait for the miners to start
 local IDLE_CONFIRM = cfg("IDLE_CONFIRM", 3)    -- how long ALL miners must be OFF to count the meteor as mined
 local MINERS_PULSE = cfg("MINERS_PULSE", 1.0)   -- length of the miners' start pulse
@@ -644,12 +644,28 @@ local function updateCrafts(now)
 end
 
 -- Fires the dropper with the catalyst of an entry. Returns true, or false + reason.
+-- Is the catalyst of this entry really inside the dropper right now? (nil = could not read)
+local function catalystInDropper(entry)
+  local ok, slot = pcall(findStack, DROPPER_SIDE, METEORS[entry.m].catalyst)
+  if not ok then return nil end
+  return slot ~= nil
+end
+
 local function dropCatalyst(entry)
   local ok, err = safe(promoteRaw, entry)
   if not ok then return false, err end
+  -- never fire an empty dropper: the catalyst must be inside it, otherwise no ritual is started
+  if catalystInDropper(entry) == false then
+    entry.loc = "chest"
+    return false, "Catalyst not in dropper"
+  end
   os.sleep(0.2)
   pulseOut("dropper", 0.3)
-  os.sleep(0.3)
+  os.sleep(0.6)
+  -- the catalyst must be gone after the pulse, otherwise the dropper did not fire
+  if catalystInDropper(entry) then
+    return false, "Dropper did not fire"
+  end
   entry.loc = "fired"
   return true
 end
@@ -673,6 +689,7 @@ local function summon(now)
   end
   local ok, err = dropCatalyst(queue[1])
   if not ok then
+    if status ~= err then logEvent(err .. " - ritual not started, retrying", 0xFFAA33) end
     status = err
     retryAt = now + 5
     return false
